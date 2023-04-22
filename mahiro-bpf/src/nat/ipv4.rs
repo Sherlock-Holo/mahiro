@@ -7,7 +7,8 @@ use aya_bpf::programs::TcContext;
 use network_types::ip::Ipv4Hdr;
 
 use crate::ip_addr::Ipv4Addr;
-use crate::nat::{update_l3_csum, update_l4_csum, Error, IpAddrType, L4Hdr};
+
+use super::{update_l3_csum, update_l4_csum, Error, IpAddrType, L4Hdr};
 
 pub fn ipv4_dnat(
     ctx: TcContext,
