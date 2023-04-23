@@ -2,7 +2,7 @@ use aya_bpf::bindings::{BPF_F_NO_PREALLOC, TC_ACT_OK, TC_ACT_SHOT};
 use aya_bpf::helpers::bpf_ktime_get_boot_ns;
 use aya_bpf::macros::map;
 use aya_bpf::maps::lpm_trie::Key;
-use aya_bpf::maps::{Array, HashMap, LpmTrie};
+use aya_bpf::maps::{HashMap, LpmTrie};
 use aya_bpf::programs::TcContext;
 use aya_log_ebpf::{debug, error, warn};
 use network_types::eth::EthHdr;
@@ -25,10 +25,6 @@ static NIC_IPV6_MAP: HashMap<u32, Ipv6Addr> = HashMap::with_max_entries(NIC_IP_M
 #[map]
 static IPV6_MAHIRO_IP: LpmTrie<Ipv6Addr, u8> =
     LpmTrie::with_max_entries(MAX_LOCAL_IP_RULE_SIZE, BPF_F_NO_PREALLOC);
-
-/// mahiro network ipv6 prefix
-#[map]
-static IPV6_MAHIRO_PREFIX: Array<u8> = Array::with_max_entries(1, 0);
 
 pub fn ipv6_egress(ctx: &TcContext, _eth_hdr: &mut EthHdr) -> Result<i32, ()> {
     let ipv6_hdr = ctx.load_ptr::<Ipv6Hdr>(EthHdr::LEN).ok_or(())?;
