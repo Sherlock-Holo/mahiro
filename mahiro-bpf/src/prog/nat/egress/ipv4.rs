@@ -128,6 +128,8 @@ fn ipv4_tcp_egress(ctx: &TcContext, ipv4_hdr: &mut Ipv4Hdr, nic_ip: Ipv4Addr) ->
 
     if ipv4::ipv4_snat(ctx, ipv4_hdr, L4Hdr::Tcp(tcp_hdr), Some(nic_ip), None).is_err() {
         error!(ctx, "ipv4 tcp snat failed");
+
+        return Err(());
     }
 
     Ok(TC_ACT_OK)
@@ -198,6 +200,8 @@ fn ipv4_udp_egress(ctx: &TcContext, ipv4_hdr: &mut Ipv4Hdr, nic_ip: Ipv4Addr) ->
 
     if ipv4::ipv4_snat(ctx, ipv4_hdr, L4Hdr::Udp(udp_hdr), Some(nic_ip), None).is_err() {
         error!(ctx, "ipv4 udp snat failed");
+
+        return Err(());
     }
 
     Ok(TC_ACT_OK)

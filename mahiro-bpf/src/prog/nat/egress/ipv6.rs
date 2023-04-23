@@ -128,6 +128,8 @@ fn ipv6_tcp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) ->
 
     if ipv6::ipv6_snat(ctx, ipv6_hdr, L4Hdr::Tcp(tcp_hdr), Some(nic_ip), None).is_err() {
         error!(ctx, "ipv6 tcp snat failed");
+
+        return Err(());
     }
 
     Ok(TC_ACT_OK)
@@ -198,6 +200,8 @@ fn ipv6_udp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) ->
 
     if ipv6::ipv6_snat(ctx, ipv6_hdr, L4Hdr::Udp(udp_hdr), Some(nic_ip), None).is_err() {
         error!(ctx, "ipv6 udp snat failed");
+
+        return Err(());
     }
 
     Ok(TC_ACT_OK)
