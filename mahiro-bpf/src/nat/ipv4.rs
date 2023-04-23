@@ -1,6 +1,6 @@
 use core::mem::size_of;
 
-use aya_bpf::bindings::{__be16, __be32, TC_ACT_OK};
+use aya_bpf::bindings::{__be16, __be32, __s64, TC_ACT_OK};
 use aya_bpf::bpf_printk;
 use aya_bpf::helpers::bpf_csum_diff;
 use aya_bpf::programs::TcContext;
@@ -84,13 +84,7 @@ pub fn ipv4_dnat(
         }
     };
 
-    if let Some(l3_csum_diff) = l3_csum_diff {
-        update_l3_csum(ctx, l3_csum_diff)?;
-    }
-
-    if let Some(l4_csum_diff) = l4_csum_diff {
-        update_l4_csum(ctx, IpAddrType::V4, l4_csum_diff, l4_hdr)?;
-    }
+    update_csum(ctx, l3_csum_diff, l4_csum_diff, l4_hdr)?;
 
     unsafe {
         bpf_printk!(b"ipv4 dnat change done");
@@ -173,17 +167,38 @@ pub fn ipv4_snat(
         }
     };
 
-    if let Some(l3_csum_diff) = l3_csum_diff {
-        update_l3_csum(ctx, l3_csum_diff)?;
-    }
-
-    if let Some(l4_csum_diff) = l4_csum_diff {
-        update_l4_csum(ctx, IpAddrType::V4, l4_csum_diff, l4_hdr)?;
-    }
+    update_csum(ctx, l3_csum_diff, l4_csum_diff, l4_hdr)?;
 
     unsafe {
         bpf_printk!(b"ipv4 snat change done");
     }
 
     Ok(TC_ACT_OK)
+}
+
+fn update_csum(
+    ctx: &TcContext,
+    l3_csum_diff: Option<__s64>,
+    l4_csum_diff: Option<__s64>,
+    l4_hdr: L4Hdr,
+) -> Result<(), Error> {
+    match (l3_csum_diff, l4_csum_diff) {
+        (Some(l3_csum_diff), Some(l4_csum_diff)) => {
+            update_l3_csum(ctx, l3_csum_diff)?;
+            update_l4_csum(ctx, IpAddrType::V4, l4_csum_diff, l4_hdr)?;
+        }
+
+        (None, Some(l4_csum_diff)) => {
+            update_l4_csum(ctx, IpAddrType::V4, l4_csum_diff, l4_hdr)?;
+        }
+
+        (Some(l3_csum_diff), None) => {
+            update_l3_csum(ctx, l3_csum_diff)?;
+            update_l4_csum(ctx, IpAddrType::V4, l3_csum_diff, l4_hdr)?;
+        }
+
+        _ => {}
+    }
+
+    Ok(())
 }
