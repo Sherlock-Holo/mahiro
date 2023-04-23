@@ -72,26 +72,55 @@ impl ConntrackEntry {
 
 #[derive(Debug, Clone)]
 pub struct ConntrackPair<'a> {
-    origin: (&'a ConntrackKey, &'a ConntrackEntry),
-    after: (&'a ConntrackKey, &'a ConntrackEntry),
+    snat: (&'a ConntrackKey, &'a ConntrackEntry),
+    dnat: (&'a ConntrackKey, &'a ConntrackEntry),
 }
 
-pub fn insert_conntrack(conntrack_pair: ConntrackPair) -> Result<(), Error> {
+impl<'a> ConntrackPair<'a> {
+    pub fn new(
+        snat_key: &'a ConntrackKey,
+        snat_entry: &'a ConntrackEntry,
+        dnat_key: &'a ConntrackKey,
+        dnat_entry: &'a ConntrackEntry,
+    ) -> Self {
+        Self {
+            snat: (snat_key, snat_entry),
+            dnat: (dnat_key, dnat_entry),
+        }
+    }
+}
+
+pub fn insert_conntrack_pair(conntrack_pair: ConntrackPair) -> Result<(), Error> {
     if SNAT_CONNTRACK_TABLE
-        .insert(conntrack_pair.origin.0, conntrack_pair.origin.1, 0)
+        .insert(conntrack_pair.snat.0, conntrack_pair.snat.1, 0)
         .is_err()
     {
         return Err(Error::InsertConntrackError);
     }
 
     if DNAT_CONNTRACK_TABLE
-        .insert(conntrack_pair.after.0, conntrack_pair.after.1, 0)
+        .insert(conntrack_pair.dnat.0, conntrack_pair.dnat.1, 0)
         .is_err()
     {
         return Err(Error::InsertConntrackError);
     }
 
     Ok(())
+}
+
+pub fn insert_conntrack(
+    key: &ConntrackKey,
+    value: &ConntrackEntry,
+    conntrack_type: ConntrackType,
+) -> Result<(), Error> {
+    let conntrack_table = match conntrack_type {
+        ConntrackType::Snat => &SNAT_CONNTRACK_TABLE,
+        ConntrackType::Dnat => &DNAT_CONNTRACK_TABLE,
+    };
+
+    conntrack_table
+        .insert(key, value, 0)
+        .map_err(|_| Error::InsertConntrackError)
 }
 
 pub fn get_conntrack_entry(

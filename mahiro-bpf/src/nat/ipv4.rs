@@ -11,7 +11,7 @@ use crate::ip_addr::Ipv4Addr;
 use super::{update_l3_csum, update_l4_csum, Error, IpAddrType, L4Hdr};
 
 pub fn ipv4_dnat(
-    ctx: TcContext,
+    ctx: &TcContext,
     ipv4_hdr: &mut Ipv4Hdr,
     mut l4_hdr: L4Hdr,
     ip: Option<Ipv4Addr>,
@@ -85,11 +85,11 @@ pub fn ipv4_dnat(
     };
 
     if let Some(l3_csum_diff) = l3_csum_diff {
-        update_l3_csum(&ctx, l3_csum_diff)?;
+        update_l3_csum(ctx, l3_csum_diff)?;
     }
 
     if let Some(l4_csum_diff) = l4_csum_diff {
-        update_l4_csum(&ctx, IpAddrType::V4, l4_csum_diff, l4_hdr)?;
+        update_l4_csum(ctx, IpAddrType::V4, l4_csum_diff, l4_hdr)?;
     }
 
     unsafe {
@@ -100,7 +100,7 @@ pub fn ipv4_dnat(
 }
 
 pub fn ipv4_snat(
-    ctx: TcContext,
+    ctx: &TcContext,
     ipv4_hdr: &mut Ipv4Hdr,
     mut l4_hdr: L4Hdr,
     ip: Option<Ipv4Addr>,
@@ -174,11 +174,11 @@ pub fn ipv4_snat(
     };
 
     if let Some(l3_csum_diff) = l3_csum_diff {
-        update_l3_csum(&ctx, l3_csum_diff)?;
+        update_l3_csum(ctx, l3_csum_diff)?;
     }
 
     if let Some(l4_csum_diff) = l4_csum_diff {
-        update_l4_csum(&ctx, IpAddrType::V4, l4_csum_diff, l4_hdr)?;
+        update_l4_csum(ctx, IpAddrType::V4, l4_csum_diff, l4_hdr)?;
     }
 
     unsafe {

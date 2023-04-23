@@ -11,7 +11,7 @@ use crate::ip_addr::Ipv6Addr;
 use super::{update_l4_csum, Error, IpAddrType, L4Hdr};
 
 pub fn ipv6_dnat(
-    ctx: TcContext,
+    ctx: &TcContext,
     ipv6_hdr: &mut Ipv6Hdr,
     mut l4_hdr: L4Hdr,
     ip: Option<Ipv6Addr>,
@@ -63,7 +63,7 @@ pub fn ipv6_dnat(
     };
 
     if let Some(l4_csum_diff) = l4_csum_diff {
-        update_l4_csum(&ctx, IpAddrType::V6, l4_csum_diff, l4_hdr)?;
+        update_l4_csum(ctx, IpAddrType::V6, l4_csum_diff, l4_hdr)?;
     }
 
     unsafe {
@@ -74,7 +74,7 @@ pub fn ipv6_dnat(
 }
 
 pub fn ipv6_snat(
-    ctx: TcContext,
+    ctx: &TcContext,
     ipv6_hdr: &mut Ipv6Hdr,
     mut l4_hdr: L4Hdr,
     ip: Option<Ipv6Addr>,
@@ -126,7 +126,7 @@ pub fn ipv6_snat(
     };
 
     if let Some(l4_csum_diff) = l4_csum_diff {
-        update_l4_csum(&ctx, IpAddrType::V6, l4_csum_diff, l4_hdr)?;
+        update_l4_csum(ctx, IpAddrType::V6, l4_csum_diff, l4_hdr)?;
     }
 
     unsafe {
