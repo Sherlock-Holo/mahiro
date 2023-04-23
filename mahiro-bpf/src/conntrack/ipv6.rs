@@ -5,7 +5,7 @@ use aya_bpf::maps::LruHashMap;
 
 use crate::ip_addr::Ipv6Addr;
 
-use super::{ConntrackType, Error, MAX_CONNTRACK_TABLE_SIZE};
+use super::{ConntrackType, Error, ProtocolType, MAX_CONNTRACK_TABLE_SIZE};
 
 #[map]
 static SNAT_CONNTRACK_TABLE: LruHashMap<ConntrackKey, ConntrackEntry> =
@@ -22,7 +22,8 @@ pub struct ConntrackKey {
     dst_addr: Ipv6Addr,
     src_port: __be16,
     dst_port: __be16,
-    _padding: [u32; 3],
+    protocol_type: u32,
+    _padding: [u32; 2],
 }
 
 impl ConntrackKey {
@@ -31,18 +32,20 @@ impl ConntrackKey {
         dst_addr: Ipv6Addr,
         src_port: __be16,
         dst_port: __be16,
+        protocol_type: ProtocolType,
     ) -> Self {
         Self {
             src_addr,
             dst_addr,
             src_port,
             dst_port,
-            _padding: [0; 3],
+            protocol_type: protocol_type as _,
+            _padding: [0; 2],
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 #[repr(C)]
 pub struct ConntrackEntry {
     src_addr: Ipv6Addr,
@@ -50,11 +53,17 @@ pub struct ConntrackEntry {
     update_time: u64,
     src_port: __be16,
     dst_port: __be16,
-    _padding: u32,
+    protocol_type: u32,
 }
 
 impl ConntrackEntry {
-    pub fn new(src_addr: Ipv6Addr, dst_addr: Ipv6Addr, src_port: __be16, dst_port: __be16) -> Self {
+    pub fn new(
+        src_addr: Ipv6Addr,
+        dst_addr: Ipv6Addr,
+        src_port: __be16,
+        dst_port: __be16,
+        protocol_type: ProtocolType,
+    ) -> Self {
         let create_time = unsafe { bpf_ktime_get_boot_ns() };
 
         Self {
@@ -63,7 +72,7 @@ impl ConntrackEntry {
             update_time: create_time,
             src_port,
             dst_port,
-            _padding: 0,
+            protocol_type: protocol_type as _,
         }
     }
 

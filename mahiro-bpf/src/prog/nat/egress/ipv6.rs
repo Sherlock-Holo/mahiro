@@ -11,7 +11,7 @@ use network_types::tcp::TcpHdr;
 use network_types::udp::UdpHdr;
 
 use crate::conntrack::ipv6::{self as ipv6_conntrack, ConntrackEntry, ConntrackKey, ConntrackPair};
-use crate::conntrack::ConntrackType;
+use crate::conntrack::{ConntrackType, ProtocolType};
 use crate::context_ext::ContextExt;
 use crate::ip_addr::Ipv6Addr;
 use crate::nat::{ipv6, L4Hdr};
@@ -70,7 +70,7 @@ fn ipv6_tcp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) ->
     let src_port = tcp_hdr.source;
     let dst_port = tcp_hdr.dest;
 
-    let snat_key = ConntrackKey::new(src_addr, dst_addr, src_port, dst_port);
+    let snat_key = ConntrackKey::new(src_addr, dst_addr, src_port, dst_port, ProtocolType::Tcp);
     match ipv6_conntrack::get_conntrack_entry(&snat_key, ConntrackType::Snat) {
         None => {
             // tcp packet is not SYN
@@ -80,9 +80,12 @@ fn ipv6_tcp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) ->
                 return Ok(TC_ACT_SHOT);
             }
 
-            let snat_entry = ConntrackEntry::new(nic_ip, dst_addr, src_port, dst_port);
-            let dnat_key = ConntrackKey::new(dst_addr, nic_ip, dst_port, src_port);
-            let dnat_entry = ConntrackEntry::new(dst_addr, src_addr, dst_port, src_port);
+            let snat_entry =
+                ConntrackEntry::new(nic_ip, dst_addr, src_port, dst_port, ProtocolType::Tcp);
+            let dnat_key =
+                ConntrackKey::new(dst_addr, nic_ip, dst_port, src_port, ProtocolType::Tcp);
+            let dnat_entry =
+                ConntrackEntry::new(dst_addr, src_addr, dst_port, src_port, ProtocolType::Tcp);
             let pair = ConntrackPair::new(&snat_key, &snat_entry, &dnat_key, &dnat_entry);
 
             if ipv6_conntrack::insert_conntrack_pair(pair).is_err() {
@@ -96,13 +99,20 @@ fn ipv6_tcp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) ->
             let update_time = unsafe { bpf_ktime_get_boot_ns() };
             snat_entry.set_update_time(update_time);
 
-            let dnat_key = ConntrackKey::new(dst_addr, nic_ip, dst_port, src_port);
+            let dnat_key =
+                ConntrackKey::new(dst_addr, nic_ip, dst_port, src_port, ProtocolType::Tcp);
 
             match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
                 None => {
                     warn!(ctx, "ipv6 tcp egress conntrack dnat miss, need rebuild");
 
-                    let dnat_entry = ConntrackEntry::new(dst_addr, src_addr, dst_port, src_port);
+                    let dnat_entry = ConntrackEntry::new(
+                        dst_addr,
+                        src_addr,
+                        dst_port,
+                        src_port,
+                        ProtocolType::Tcp,
+                    );
 
                     if ipv6_conntrack::insert_conntrack(&dnat_key, &dnat_entry, ConntrackType::Dnat)
                         .is_err()
@@ -137,12 +147,15 @@ fn ipv6_udp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) ->
     let src_port = udp_hdr.source;
     let dst_port = udp_hdr.dest;
 
-    let snat_key = ConntrackKey::new(src_addr, dst_addr, src_port, dst_port);
+    let snat_key = ConntrackKey::new(src_addr, dst_addr, src_port, dst_port, ProtocolType::Udp);
     match ipv6_conntrack::get_conntrack_entry(&snat_key, ConntrackType::Snat) {
         None => {
-            let snat_entry = ConntrackEntry::new(nic_ip, dst_addr, src_port, dst_port);
-            let dnat_key = ConntrackKey::new(dst_addr, nic_ip, dst_port, src_port);
-            let dnat_entry = ConntrackEntry::new(dst_addr, src_addr, dst_port, src_port);
+            let snat_entry =
+                ConntrackEntry::new(nic_ip, dst_addr, src_port, dst_port, ProtocolType::Udp);
+            let dnat_key =
+                ConntrackKey::new(dst_addr, nic_ip, dst_port, src_port, ProtocolType::Udp);
+            let dnat_entry =
+                ConntrackEntry::new(dst_addr, src_addr, dst_port, src_port, ProtocolType::Udp);
             let pair = ConntrackPair::new(&snat_key, &snat_entry, &dnat_key, &dnat_entry);
 
             if ipv6_conntrack::insert_conntrack_pair(pair).is_err() {
@@ -156,13 +169,20 @@ fn ipv6_udp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) ->
             let update_time = unsafe { bpf_ktime_get_boot_ns() };
             snat_entry.set_update_time(update_time);
 
-            let dnat_key = ConntrackKey::new(dst_addr, nic_ip, dst_port, src_port);
+            let dnat_key =
+                ConntrackKey::new(dst_addr, nic_ip, dst_port, src_port, ProtocolType::Udp);
 
             match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
                 None => {
                     warn!(ctx, "ipv6 udp egress conntrack dnat miss, need rebuild");
 
-                    let dnat_entry = ConntrackEntry::new(dst_addr, src_addr, dst_port, src_port);
+                    let dnat_entry = ConntrackEntry::new(
+                        dst_addr,
+                        src_addr,
+                        dst_port,
+                        src_port,
+                        ProtocolType::Udp,
+                    );
 
                     if ipv6_conntrack::insert_conntrack(&dnat_key, &dnat_entry, ConntrackType::Dnat)
                         .is_err()

@@ -13,3 +13,10 @@ pub enum ConntrackType {
     Snat,
     Dnat,
 }
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum ProtocolType {
+    Tcp = 0,
+    Udp = 1,
+}
