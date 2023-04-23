@@ -8,11 +8,11 @@ use crate::ip_addr::Ipv6Addr;
 use super::{ConntrackType, Error, ProtocolType, MAX_CONNTRACK_TABLE_SIZE};
 
 #[map]
-static SNAT_CONNTRACK_TABLE: LruHashMap<ConntrackKey, ConntrackEntry> =
+static IPV6_SNAT_CONNTRACK_TABLE: LruHashMap<ConntrackKey, ConntrackEntry> =
     LruHashMap::with_max_entries(MAX_CONNTRACK_TABLE_SIZE, 0);
 
 #[map]
-static DNAT_CONNTRACK_TABLE: LruHashMap<ConntrackKey, ConntrackEntry> =
+static IPV6_DNAT_CONNTRACK_TABLE: LruHashMap<ConntrackKey, ConntrackEntry> =
     LruHashMap::with_max_entries(MAX_CONNTRACK_TABLE_SIZE, 0);
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -118,14 +118,14 @@ impl<'a> ConntrackPair<'a> {
 }
 
 pub fn insert_conntrack_pair(conntrack_pair: ConntrackPair) -> Result<(), Error> {
-    if SNAT_CONNTRACK_TABLE
+    if IPV6_SNAT_CONNTRACK_TABLE
         .insert(conntrack_pair.snat.0, conntrack_pair.snat.1, 0)
         .is_err()
     {
         return Err(Error::InsertConntrackError);
     }
 
-    if DNAT_CONNTRACK_TABLE
+    if IPV6_DNAT_CONNTRACK_TABLE
         .insert(conntrack_pair.dnat.0, conntrack_pair.dnat.1, 0)
         .is_err()
     {
@@ -141,8 +141,8 @@ pub fn insert_conntrack(
     conntrack_type: ConntrackType,
 ) -> Result<(), Error> {
     let conntrack_table = match conntrack_type {
-        ConntrackType::Snat => &SNAT_CONNTRACK_TABLE,
-        ConntrackType::Dnat => &DNAT_CONNTRACK_TABLE,
+        ConntrackType::Snat => &IPV6_SNAT_CONNTRACK_TABLE,
+        ConntrackType::Dnat => &IPV6_DNAT_CONNTRACK_TABLE,
     };
 
     conntrack_table
@@ -155,8 +155,8 @@ pub fn get_conntrack_entry(
     conntrack_type: ConntrackType,
 ) -> Option<&mut ConntrackEntry> {
     let conntrack_table = match conntrack_type {
-        ConntrackType::Snat => &SNAT_CONNTRACK_TABLE,
-        ConntrackType::Dnat => &DNAT_CONNTRACK_TABLE,
+        ConntrackType::Snat => &IPV6_SNAT_CONNTRACK_TABLE,
+        ConntrackType::Dnat => &IPV6_DNAT_CONNTRACK_TABLE,
     };
 
     conntrack_table
@@ -169,8 +169,8 @@ pub fn remove_conntrack_entry(
     conntrack_type: ConntrackType,
 ) -> Result<(), Error> {
     let conntrack_table = match conntrack_type {
-        ConntrackType::Snat => &SNAT_CONNTRACK_TABLE,
-        ConntrackType::Dnat => &DNAT_CONNTRACK_TABLE,
+        ConntrackType::Snat => &IPV6_SNAT_CONNTRACK_TABLE,
+        ConntrackType::Dnat => &IPV6_DNAT_CONNTRACK_TABLE,
     };
 
     conntrack_table
