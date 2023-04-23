@@ -79,6 +79,22 @@ impl ConntrackEntry {
     pub fn set_update_time(&mut self, update_time: u64) {
         self.update_time = update_time;
     }
+
+    pub fn get_src_addr(&self) -> Ipv6Addr {
+        self.src_addr
+    }
+
+    pub fn get_dst_addr(&self) -> Ipv6Addr {
+        self.dst_addr
+    }
+
+    pub fn get_src_port(&self) -> __be16 {
+        self.src_port
+    }
+
+    pub fn get_dst_port(&self) -> __be16 {
+        self.dst_port
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -146,4 +162,18 @@ pub fn get_conntrack_entry(
     conntrack_table
         .get_ptr_mut(key)
         .map(|entry| unsafe { &mut *entry })
+}
+
+pub fn remove_conntrack_entry(
+    key: &ConntrackKey,
+    conntrack_type: ConntrackType,
+) -> Result<(), Error> {
+    let conntrack_table = match conntrack_type {
+        ConntrackType::Snat => &SNAT_CONNTRACK_TABLE,
+        ConntrackType::Dnat => &DNAT_CONNTRACK_TABLE,
+    };
+
+    conntrack_table
+        .remove(key)
+        .map_err(|_| Error::RemoveConntrackError)
 }
