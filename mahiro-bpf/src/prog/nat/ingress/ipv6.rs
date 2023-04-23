@@ -70,7 +70,7 @@ fn ipv6_tcp_ingress(
         };
     }
 
-    let dnat_entry = match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
+    let dnat_dst_addr = match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
         None => return Ok(TC_ACT_OK),
         Some(dnat_entry) => {
             let update_time = unsafe { bpf_ktime_get_boot_ns() };
@@ -105,7 +105,7 @@ fn ipv6_tcp_ingress(
                 }
             }
 
-            dnat_entry
+            dnat_entry.get_dst_addr()
         }
     };
 
@@ -113,7 +113,7 @@ fn ipv6_tcp_ingress(
         ctx,
         ipv6_hdr,
         L4Hdr::Tcp(tcp_hdr),
-        Some(dnat_entry.get_dst_addr()),
+        Some(dnat_dst_addr),
         None,
     )
     .map_err(|_| ())
@@ -133,7 +133,7 @@ fn ipv6_udp_ingress(
     let dst_port = udp_hdr.dest;
     let dnat_key = ConntrackKey::new(src_addr, dst_addr, src_port, dst_port, ProtocolType::Tcp);
 
-    let dnat_entry = match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
+    let dnat_dst_addr = match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
         None => return Ok(TC_ACT_OK),
         Some(dnat_entry) => {
             let update_time = unsafe { bpf_ktime_get_boot_ns() };
@@ -168,7 +168,7 @@ fn ipv6_udp_ingress(
                 }
             }
 
-            dnat_entry
+            dnat_entry.get_dst_addr()
         }
     };
 
@@ -176,7 +176,7 @@ fn ipv6_udp_ingress(
         ctx,
         ipv6_hdr,
         L4Hdr::Udp(udp_hdr),
-        Some(dnat_entry.get_dst_addr()),
+        Some(dnat_dst_addr),
         None,
     )
     .map_err(|_| ())
