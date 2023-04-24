@@ -31,7 +31,7 @@ pub fn ipv6_egress(ctx: &TcContext, _eth_hdr: &mut EthHdr) -> Result<i32, ()> {
     let src_addr = Ipv6Addr::from(unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 });
     let key = Key::new(128, src_addr);
 
-    // the src ipv4 is not in mahiro network
+    // the src ipv6 is not in mahiro network
     if IPV6_MAHIRO_IP.get(&key).copied().unwrap_or(0) == 0 {
         return Ok(TC_ACT_OK);
     }

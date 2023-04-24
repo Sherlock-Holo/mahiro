@@ -1,6 +1,6 @@
-use aya_bpf::bindings::__be32;
+use core::mem::transmute;
 
-pub type Be128 = u128;
+use aya_bpf::bindings::__be32;
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(transparent)]
@@ -44,14 +44,6 @@ pub struct Ipv6Addr {
     ip: [u8; 16],
 }
 
-impl From<Be128> for Ipv6Addr {
-    fn from(value: Be128) -> Self {
-        Self {
-            ip: u128::from_be(value).to_be_bytes(),
-        }
-    }
-}
-
 impl From<[u8; 16]> for Ipv6Addr {
     fn from(value: [u8; 16]) -> Self {
         Self { ip: value }
@@ -61,5 +53,11 @@ impl From<[u8; 16]> for Ipv6Addr {
 impl From<Ipv6Addr> for [u8; 16] {
     fn from(value: Ipv6Addr) -> Self {
         value.ip
+    }
+}
+
+impl From<Ipv6Addr> for [__be32; 4] {
+    fn from(value: Ipv6Addr) -> Self {
+        unsafe { transmute(value.ip) }
     }
 }

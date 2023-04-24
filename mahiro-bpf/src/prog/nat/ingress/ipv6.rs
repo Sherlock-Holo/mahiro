@@ -86,7 +86,7 @@ fn ipv6_tcp_ingress(
 
             match ipv6_conntrack::get_conntrack_entry(&snat_key, ConntrackType::Snat) {
                 None => {
-                    warn!(ctx, "ipv4 tcp ingress conntrack dnat miss, need rebuild");
+                    warn!(ctx, "ipv6 tcp ingress conntrack dnat miss, need rebuild");
 
                     let snat_entry = ConntrackEntry::new(
                         dst_addr,
