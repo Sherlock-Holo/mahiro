@@ -748,6 +748,7 @@ version = "0.1.0"
 dependencies = [
  "aya 0.11.0 (git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13)",
  "aya-log",
+ "bytes",
  "clap",
  "futures-util",
  "once_cell",
@@ -755,7 +756,9 @@ dependencies = [
  "serde",
  "serde_yaml",
  "snow",
+ "thiserror",
  "tokio",
+ "tracing",
  "tun",
 ]
 
@@ -1372,6 +1375,37 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.15",
+]
+
+[[package]]
+name = "tracing"
+version = "0.1.38"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf9cf6a813d3f40c88b0b6b6f29a5c95c6cdbf97c1f9cc53fb820200f5ad814d"
+dependencies = [
+ "pin-project-lite",
+ "tracing-attributes",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f57e3ca2a01450b1a921183a9c9cbfda207fd822cef4ccb00a65402cbba7a74"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.15",
+]
+
+[[package]]
+name = "tracing-core"
+version = "0.1.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24eb03ba0eab1fd845050058ce5e616558e8f8d8fca633e6b163fe25c797213a"
+dependencies = [
+ "once_cell",
 ]
 
 [[package]]
