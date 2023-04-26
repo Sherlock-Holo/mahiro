@@ -1,0 +1,27 @@
+[package]
+name = "mahiro"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time"] }
+futures-util = "0.3"
+once_cell = "1"
+
+# noise encrypt
+snow = "0.9"
+
+# bpf
+aya = { git = "https://github.com/aya-rs/aya", tag = "aya-log-v0.1.13", features = ["async_tokio"] }
+aya-log = { git = "https://github.com/aya-rs/aya", tag = "aya-log-v0.1.13" }
+
+# config
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+# tun device
+tun = "0.5"
+rtnetlink = "0.12"

@@ -1,4 +1,6 @@
 #![no_std]
+#![doc(html_logo_url = "https://raw.githubusercontent.com/Sherlock-Holo/mahiro/master/mahiro.svg")]
+
 mod conntrack;
 mod context_ext;
 mod ip_addr;
