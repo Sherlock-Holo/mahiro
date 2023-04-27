@@ -332,6 +332,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cidr"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "300bccc729b1ada84523246038aad61fead689ac362bb9d44beea6f6a188c34b"
+
+[[package]]
 name = "cipher"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -439,6 +445,17 @@ dependencies = [
  "platforms",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "derivative"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -750,7 +767,9 @@ dependencies = [
  "aya 0.11.0 (git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13)",
  "aya-log",
  "bytes",
+ "cidr",
  "clap",
+ "derivative",
  "futures-util",
  "netlink-packet-route",
  "once_cell",
@@ -1387,6 +1406,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-util"
+version = "0.6.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36943ee01a6d67977dd3f84a5a1d2efeb4ada3a1ae771cadfaa535d9d9fc6507"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "log",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1423,9 +1456,14 @@ version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cbc25e23adc6cac7dd895ce2780f255902290fc39b00e1ae3c33e89f3d20fa66"
 dependencies = [
+ "byteorder",
+ "bytes",
+ "futures-core",
  "ioctl-sys",
  "libc",
  "thiserror",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::net::IpAddr;
 
+use derivative::Derivative;
 use futures_util::TryStreamExt;
 use netlink_packet_route::rule::Nla;
 use netlink_packet_route::{RuleMessage, AF_INET, AF_INET6};
@@ -11,19 +12,16 @@ use tracing::{error, info, instrument};
 const TABLE_ID1: u8 = 25;
 const TABLE_ID2: u8 = 24;
 
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct RouteTable {
     current_table_id: u8,
+    #[derivative(Debug = "ignore")]
     route_handle: RouteHandle,
+    #[derivative(Debug = "ignore")]
     rule_handle: RuleHandle,
+    #[derivative(Debug = "ignore")]
     link_handle: LinkHandle,
-}
-
-impl Debug for RouteTable {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RouteTable")
-            .field("current_table_id", &self.current_table_id)
-            .finish_non_exhaustive()
-    }
 }
 
 impl RouteTable {

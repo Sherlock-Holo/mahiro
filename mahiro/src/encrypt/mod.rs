@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use bytes::{Bytes, BytesMut};
+use derivative::Derivative;
 use once_cell::sync::Lazy;
 use snow::params::NoiseParams;
 use snow::Builder;
@@ -41,9 +42,11 @@ enum State {
     Transport(snow::StatelessTransportState),
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Encrypt {
     state: State,
+    #[derivative(Debug = "ignore")]
     buffer: BytesMut,
 }
 
