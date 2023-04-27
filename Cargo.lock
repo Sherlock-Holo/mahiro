@@ -770,6 +770,7 @@ dependencies = [
  "cidr",
  "clap",
  "derivative",
+ "futures-channel",
  "futures-util",
  "netlink-packet-route",
  "once_cell",
