@@ -1,12 +1,11 @@
-use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BytesMut};
 use prost::Message as _;
 use ractor::factory::{
-    FactoryMessage, Job, WorkerBuilder, WorkerId, WorkerMessage, WorkerStartContext,
+    Factory, FactoryMessage, Job, WorkerBuilder, WorkerId, WorkerMessage, WorkerStartContext,
 };
 use ractor::{Actor, ActorId, ActorProcessingErr, ActorRef};
 use tap::TapFallible;
@@ -14,18 +13,21 @@ use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 
+use crate::mahiro::message::EncryptMessage;
 use crate::protocol::Frame;
+
+use super::message::UdpMessage as Message;
 
 #[derive(Debug)]
 struct UdpActor {
     worker_id: WorkerId,
     remote_addr: SocketAddr,
-    encrypt: ActorRef<FactoryMessage<ActorId, Frame>>,
+    encrypt: ActorRef<FactoryMessage<ActorId, EncryptMessage>>,
 }
 
 struct UdpActorBuilder {
     remote_addr: SocketAddr,
-    encrypt: ActorRef<FactoryMessage<ActorId, Frame>>,
+    encrypt: ActorRef<FactoryMessage<ActorId, EncryptMessage>>,
 }
 
 impl WorkerBuilder<UdpActor> for UdpActorBuilder {
@@ -51,11 +53,6 @@ impl Drop for State {
     }
 }
 
-enum Message {
-    Frame(Frame),
-    Packet(io::Result<Bytes>),
-}
-
 #[async_trait]
 impl Actor for UdpActor {
     type Msg = WorkerMessage<ActorId, Message>;
@@ -70,6 +67,12 @@ impl Actor for UdpActor {
         let udp_socket = UdpSocket::bind("0.0.0.0:0")
             .await
             .tap_err(|err| error!(%err,"bind udp failed"))?;
+        udp_socket.connect(self.remote_addr).await.tap_err(
+            |err| error!(%err, remote_addr = %self.remote_addr, "connect remote failed"),
+        )?;
+
+        info!(remote_addr = %self.remote_addr, "connect remote done");
+
         let udp_socket = Arc::new(udp_socket);
 
         let read_task = {
@@ -176,7 +179,7 @@ impl Actor for UdpActor {
                 self.encrypt
                     .send_message(FactoryMessage::Dispatch(Job {
                         key: self.encrypt.get_id(),
-                        msg: frame,
+                        msg: EncryptMessage::Frame(frame),
                         options: Default::default(),
                     }))
                     .tap_err(|err| error!(%err, "send frame to encrypt failed"))?;
@@ -184,5 +187,114 @@ impl Actor for UdpActor {
                 Ok(())
             }
         }
+    }
+}
+
+pub async fn start_udp_actor(
+    remote_addr: SocketAddr,
+    encrypt: ActorRef<FactoryMessage<ActorId, EncryptMessage>>,
+) -> anyhow::Result<(ActorRef<FactoryMessage<ActorId, Message>>, JoinHandle<()>)> {
+    let builder = UdpActorBuilder {
+        remote_addr,
+        encrypt,
+    };
+
+    let (udp_actor, task) = Actor::spawn(None, Factory::default(), Box::new(builder)).await?;
+
+    Ok((udp_actor, task))
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use futures_channel::mpsc;
+    use futures_channel::mpsc::Sender;
+    use futures_util::{SinkExt, StreamExt};
+    use test_log::test;
+
+    use crate::protocol::FrameType;
+
+    use super::*;
+
+    #[test(tokio::test)]
+    async fn test() {
+        let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = server.local_addr().unwrap();
+
+        struct StubEncrypt(Sender<Frame>);
+
+        #[async_trait]
+        impl Actor for StubEncrypt {
+            type Msg = FactoryMessage<ActorId, EncryptMessage>;
+            type State = ();
+            type Arguments = ();
+
+            async fn pre_start(
+                &self,
+                _myself: ActorRef<Self::Msg>,
+                _args: Self::Arguments,
+            ) -> Result<Self::State, ActorProcessingErr> {
+                Ok(())
+            }
+
+            async fn handle(
+                &self,
+                _myself: ActorRef<Self::Msg>,
+                message: Self::Msg,
+                _state: &mut Self::State,
+            ) -> Result<(), ActorProcessingErr> {
+                let message = match message {
+                    FactoryMessage::Dispatch(message) => message,
+                    _ => panic!("other factory message"),
+                };
+
+                match message.msg {
+                    EncryptMessage::Frame(frame) => {
+                        self.0.clone().send(frame).await.unwrap();
+                    }
+
+                    _ => panic!("other encrypt message"),
+                }
+
+                Ok(())
+            }
+        }
+
+        let (sender, mut receiver) = mpsc::channel(1);
+        let (encrypt, _) = Actor::spawn(None, StubEncrypt(sender), ()).await.unwrap();
+        let (udp_actor, _) = start_udp_actor(addr, encrypt).await.unwrap();
+        let frame = Frame {
+            r#type: FrameType::Handshake as _,
+            nonce: 0,
+            data: Bytes::from_static(b"hello"),
+        };
+
+        udp_actor
+            .send_message(FactoryMessage::Dispatch(Job {
+                key: udp_actor.get_id(),
+                msg: Message::Frame(frame.clone()),
+                options: Default::default(),
+            }))
+            .unwrap();
+
+        let mut buf = vec![0; 4096];
+        let (n, from) = server.recv_from(&mut buf).await.unwrap();
+        info!(%from, "get client udp addr");
+
+        let receive_frame = Frame::decode(&buf[..n]).unwrap();
+
+        assert_eq!(frame, receive_frame);
+
+        let frame = Frame {
+            r#type: FrameType::Handshake as _,
+            nonce: 1,
+            data: Bytes::from_static(b"world"),
+        };
+
+        server.send_to(&frame.encode_to_vec(), from).await.unwrap();
+
+        let receive_frame = receiver.next().await.unwrap();
+
+        assert_eq!(frame, receive_frame);
     }
 }

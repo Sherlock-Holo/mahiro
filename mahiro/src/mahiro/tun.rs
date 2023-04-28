@@ -15,6 +15,8 @@ use tracing::error;
 use crate::route_table::{RouteEntry, RouteTable};
 use crate::tun::Tun;
 
+use super::message::TunMessage as Message;
+
 struct TunActor {
     worker_id: WorkerId,
     tun_ipv4: Ipv4Inet,
@@ -62,11 +64,6 @@ impl Drop for State {
     fn drop(&mut self) {
         self.read_task.abort();
     }
-}
-
-enum Message {
-    FromTun(io::Result<Bytes>),
-    ToTun(Bytes),
 }
 
 #[async_trait]

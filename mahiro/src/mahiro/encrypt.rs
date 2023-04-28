@@ -17,6 +17,8 @@ use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::HEARTBEAT_DATA;
 
+use super::message::EncryptMessage as Message;
+
 enum State {
     Uninit {
         factory: ActorRef<FactoryMessage<ActorId, Message>>,
@@ -51,14 +53,6 @@ impl Drop for State {
             heartbeat_task.abort();
         }
     }
-}
-
-pub enum Message {
-    Init,
-    Packet(Bytes),
-    Frame(Frame),
-    HandshakeTimeout,
-    Heartbeat,
 }
 
 struct EncryptActor {
