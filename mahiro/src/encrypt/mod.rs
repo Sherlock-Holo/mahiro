@@ -150,6 +150,12 @@ impl Encrypt {
     pub fn initiator_handshake_response(&mut self, data: &[u8]) -> HandshakeState {
         match &mut self.state {
             State::Handshake(handshake, buffer) => match handshake.read_message(data, buffer) {
+                Err(snow::Error::Input) => {
+                    error!("invalid input");
+
+                    HandshakeState::MissPeerPublicKey
+                }
+
                 Err(err) => {
                     error!(%err, "initiator handshake failed");
 

@@ -4,5 +4,6 @@
 mod encrypt;
 mod mahiro;
 mod mihari;
+mod protocol;
 mod route_table;
 mod tun;

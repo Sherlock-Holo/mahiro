@@ -4,16 +4,16 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{error, info};
 
-use crate::tun::Tun as TunDevice;
+use crate::tun::Tun;
 
 #[derive(Debug)]
-pub struct Tun {
-    tun_device: TunDevice,
+pub struct TunActor {
+    tun_device: Tun,
     packet_sender: Sender<Bytes>,
     packet_receiver: Receiver<Bytes>,
 }
 
-impl Tun {
+impl TunActor {
     async fn run_loop(&mut self) {
         let mut buf = BytesMut::with_capacity(4096);
 

@@ -1,1 +1,2 @@
+mod encrypt;
 mod tun;

@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package mahiro;
+
+enum FrameType {
+  Handshake = 0;
+  Transport = 1;
+}
+
+message Frame {
+  FrameType type = 1;
+  uint64 nonce = 2;
+  bytes data = 3;
+}
+
+message FrameData {
+  oneof data_or_heartbeat {
+    bytes data = 1;
+    bytes ping = 2;
+    bytes pong = 3;
+  }
+}
