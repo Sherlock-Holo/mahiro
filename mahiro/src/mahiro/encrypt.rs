@@ -15,8 +15,7 @@ use tracing::{error, warn};
 use crate::encrypt::{Encrypt, HandshakeState};
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
-
-const HEARTBEAT_DATA: &[u8] = b"onimai";
+use crate::HEARTBEAT_DATA;
 
 enum State {
     Uninit {
@@ -41,6 +40,15 @@ impl State {
             State::Uninit { factory } => factory,
             State::Handshake { factory, .. } => factory,
             State::Transport { factory, .. } => factory,
+        }
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        // stop the heartbeat task
+        if let State::Transport { heartbeat_task, .. } = self {
+            heartbeat_task.abort();
         }
     }
 }
@@ -105,18 +113,6 @@ impl Actor for EncryptActor {
         Ok(State::Uninit {
             factory: args.factory,
         })
-    }
-
-    async fn post_stop(
-        &self,
-        _myself: ActorRef<Self::Msg>,
-        state: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        if let State::Transport { heartbeat_task, .. } = state {
-            heartbeat_task.abort();
-        }
-
-        Ok(())
     }
 
     async fn handle(
