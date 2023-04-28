@@ -4,7 +4,6 @@ use std::net::IpAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::BytesMut;
 use cidr::{Ipv4Inet, Ipv6Inet};
 use derivative::Derivative;
 use futures_util::TryStreamExt;
@@ -22,8 +21,6 @@ pub struct Tun {
     name: String,
     #[derivative(Debug = "ignore")]
     device: AsyncDevice,
-    #[derivative(Debug = "ignore")]
-    buf: BytesMut,
 }
 
 impl Tun {
@@ -45,7 +42,6 @@ impl Tun {
             ipv6,
             name,
             device,
-            buf: BytesMut::with_capacity(MTU as _),
         })
     }
 
