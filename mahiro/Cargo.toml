@@ -53,6 +53,7 @@ tracing-subscriber = "0.3"
 [dev-dependencies]
 test-log = { version = "0.2", default-features = false, features = ["trace"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+replace_with = "0.1"
 
 [build-dependencies]
 prost-build = "0.11"

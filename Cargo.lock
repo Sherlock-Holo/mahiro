@@ -836,6 +836,7 @@ dependencies = [
  "prost-build",
  "ractor",
  "rand",
+ "replace_with",
  "rtnetlink",
  "serde",
  "serde_yaml",
@@ -1384,6 +1385,12 @@ name = "regex-syntax"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5996294f19bd3aae0453a862ad728f60e6600695733dd5df01da90c54363a3c"
+
+[[package]]
+name = "replace_with"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3a8614ee435691de62bcffcf4a66d91b3594bf1428a5722e79103249a095690"
 
 [[package]]
 name = "rtnetlink"
