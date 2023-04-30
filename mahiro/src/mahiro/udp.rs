@@ -23,6 +23,7 @@ pub struct UdpActor {
     encrypt_sender: Sender<EncryptMessage>,
 
     remote_addr: SocketAddr,
+
     udp_socket: Arc<UdpSocket>,
     read_task: JoinHandle<()>,
 }

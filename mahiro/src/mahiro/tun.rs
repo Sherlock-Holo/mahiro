@@ -1,197 +1,218 @@
-use async_trait::async_trait;
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BytesMut};
 use cidr::{Ipv4Inet, Ipv6Inet};
-use ractor::concurrency::JoinHandle;
-use ractor::factory::{
-    FactoryMessage, Job, WorkerBuilder, WorkerId, WorkerMessage, WorkerStartContext,
-};
-use ractor::{Actor, ActorId, ActorProcessingErr, ActorRef};
+use futures_channel::mpsc;
+use futures_channel::mpsc::{Receiver, Sender};
+use futures_util::{SinkExt, StreamExt};
 use rtnetlink::Handle;
 use tap::TapFallible;
 use tokio::io;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
-use tracing::error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::task::JoinHandle;
+use tracing::{error, info};
 
+use crate::mahiro::message::EncryptMessage;
 use crate::route_table::{RouteEntry, RouteTable};
 use crate::tun::Tun;
 
 use super::message::TunMessage as Message;
 
-struct TunActor {
-    worker_id: WorkerId,
+#[derive(Debug)]
+struct TunConfig {
     tun_ipv4: Ipv4Inet,
     tun_ipv6: Ipv6Inet,
     tun_name: String,
     netlink_handle: Handle,
     route_entries: Vec<RouteEntry>,
     fwmark: u32,
-    encrypt: ActorRef<FactoryMessage<ActorId, Bytes>>,
 }
 
-struct TunActorBuilder {
-    tun_ipv4: Ipv4Inet,
-    tun_ipv6: Ipv6Inet,
-    tun_name: String,
-    netlink_handle: Handle,
-    route_entries: Vec<RouteEntry>,
-    fwmark: u32,
-    encrypt: ActorRef<FactoryMessage<ActorId, Bytes>>,
-}
+#[derive(Debug)]
+pub struct TunActor {
+    mailbox_sender: Sender<Message>,
+    mailbox: Receiver<Message>,
+    encrypt_sender: Sender<EncryptMessage>,
 
-impl WorkerBuilder<TunActor> for TunActorBuilder {
-    fn build(&self, wid: WorkerId) -> TunActor {
-        TunActor {
-            worker_id: wid,
-            tun_ipv4: self.tun_ipv4,
-            tun_ipv6: self.tun_ipv6,
-            tun_name: self.tun_name.clone(),
-            netlink_handle: self.netlink_handle.clone(),
-            route_entries: self.route_entries.clone(),
-            fwmark: self.fwmark,
-            encrypt: self.encrypt.clone(),
-        }
-    }
-}
+    tun_config: TunConfig,
 
-struct State {
     tun: WriteHalf<Tun>,
     route_table: RouteTable,
     read_task: JoinHandle<()>,
-    factory: ActorRef<FactoryMessage<ActorId, Message>>,
 }
 
-impl Drop for State {
-    fn drop(&mut self) {
-        self.read_task.abort();
+impl TunActor {
+    pub async fn new(
+        encrypt_sender: Sender<EncryptMessage>,
+        tun_ipv4: Ipv4Inet,
+        tun_ipv6: Ipv6Inet,
+        tun_name: String,
+        netlink_handle: Handle,
+        route_entries: Vec<RouteEntry>,
+        fwmark: u32,
+    ) -> anyhow::Result<(Self, Sender<Message>)> {
+        let tun_config = TunConfig {
+            tun_ipv4,
+            tun_ipv6,
+            tun_name,
+            netlink_handle,
+            route_entries,
+            fwmark,
+        };
+
+        let (sender, mailbox) = mpsc::channel(10);
+
+        let (tun, route_table, read_task) = Self::start(sender.clone(), &tun_config).await?;
+
+        Ok((
+            Self {
+                mailbox_sender: sender.clone(),
+                mailbox,
+                encrypt_sender,
+                tun_config,
+                tun,
+                route_table,
+                read_task,
+            },
+            sender,
+        ))
     }
-}
 
-#[async_trait]
-impl Actor for TunActor {
-    type Msg = WorkerMessage<ActorId, Message>;
-    type State = State;
-    type Arguments = WorkerStartContext<ActorId, Message>;
-
-    async fn pre_start(
-        &self,
-        myself: ActorRef<Self::Msg>,
-        args: Self::Arguments,
-    ) -> Result<Self::State, ActorProcessingErr> {
+    async fn start(
+        mailbox_sender: Sender<Message>,
+        tun_config: &TunConfig,
+    ) -> anyhow::Result<(WriteHalf<Tun>, RouteTable, JoinHandle<()>)> {
         let tun = Tun::new(
-            self.tun_name.clone(),
-            self.tun_ipv4,
-            self.tun_ipv6,
-            self.netlink_handle.clone(),
+            tun_config.tun_name.clone(),
+            tun_config.tun_ipv4,
+            tun_config.tun_ipv6,
+            tun_config.netlink_handle.clone(),
         )
         .await
         .tap_err(|err| error!(%err, "create tun failed"))?;
 
-        let mut route_table = RouteTable::new(self.netlink_handle.clone());
-        route_table.clean_route_tables(self.fwmark).await?;
+        info!(?tun, "create tun done");
+
+        let mut route_table = RouteTable::new(tun_config.netlink_handle.clone());
+
+        let fwmark = tun_config.fwmark;
+
+        route_table.clean_route_tables(fwmark).await?;
+
+        info!(fwmark, "clean route tables done");
+
         route_table
-            .update_route(self.fwmark, &self.route_entries)
+            .update_route(fwmark, &tun_config.route_entries)
             .await?;
 
-        let (mut read_tun, write_tun) = io::split(tun);
-        let read_task = tokio::spawn(async move {
-            let mut buf = BytesMut::with_capacity(65535);
-            let id = myself.get_id();
-            loop {
-                buf.clear();
+        info!(fwmark, route_entries = ?tun_config.route_entries, "update route done");
 
-                match read_tun
-                    .read_buf(&mut buf)
-                    .await
-                    .map(|n| buf.copy_to_bytes(n))
-                {
-                    Err(err) => {
-                        error!(%err, "read packet from tun failed");
+        let (tun_read, tun_write) = io::split(tun);
 
-                        let _ = myself.send_message(WorkerMessage::Dispatch(Job {
-                            key: id,
-                            msg: Message::FromTun(Err(err)),
-                            options: Default::default(),
-                        }));
+        let read_task =
+            tokio::spawn(async move { Self::read_from_tun(tun_read, mailbox_sender).await });
 
-                        return;
-                    }
+        Ok((tun_write, route_table, read_task))
+    }
 
-                    Ok(data) => {
-                        if let Err(err) = myself.send_message(WorkerMessage::Dispatch(Job {
-                            key: id,
-                            msg: Message::FromTun(Ok(data)),
-                            options: Default::default(),
-                        })) {
-                            error!(%err, "send packet failed");
+    async fn restart(&mut self) -> anyhow::Result<()> {
+        self.read_task.abort();
+        self.tun
+            .shutdown()
+            .await
+            .tap_err(|err| error!(%err, "shutdown tun failed"))?;
 
-                            return;
+        let (tun, route_table, read_task) =
+            Self::start(self.mailbox_sender.clone(), &self.tun_config).await?;
+
+        self.tun = tun;
+        self.route_table = route_table;
+        self.read_task = read_task;
+
+        Ok(())
+    }
+
+    async fn read_from_tun(mut tun_read: ReadHalf<Tun>, mut sender: Sender<Message>) {
+        let mut buf = BytesMut::with_capacity(4096);
+        loop {
+            buf.clear();
+
+            let packet = match tun_read.read_buf(&mut buf).await {
+                Err(err) => {
+                    error!(%err, "receive tun packet failed");
+
+                    let _ = sender.send(Message::FromTun(Err(err))).await;
+
+                    return;
+                }
+
+                Ok(n) => buf.copy_to_bytes(n),
+            };
+
+            if let Err(err) = sender.send(Message::FromTun(Ok(packet))).await {
+                error!(%err, "send tun packet failed");
+
+                return;
+            }
+        }
+    }
+
+    pub async fn run(&mut self) {
+        loop {
+            if let Err(err) = self.run_circle().await {
+                error!(%err, "tun run circle failed, need restart");
+
+                loop {
+                    match self.restart().await {
+                        Err(err) => {
+                            error!(%err, "tun restart failed");
+                        }
+
+                        Ok(_) => {
+                            info!("tun restart done");
+
+                            break;
                         }
                     }
                 }
             }
-        });
-
-        Ok(State {
-            tun: write_tun,
-            route_table,
-            read_task,
-            factory: args.factory,
-        })
+        }
     }
 
-    async fn handle(
-        &self,
-        _myself: ActorRef<Self::Msg>,
-        message: Self::Msg,
-        state: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        let message = match message {
-            WorkerMessage::FactoryPing(ping) => {
-                state
-                    .factory
-                    .send_message(FactoryMessage::WorkerPong(self.worker_id, ping))?;
+    async fn run_circle(&mut self) -> anyhow::Result<()> {
+        let message = match self.mailbox.next().await {
+            None => {
+                error!("receive packet from mailbox failed");
 
-                return Ok(());
+                return Err(anyhow::anyhow!("receive packet from mailbox failed"));
             }
-            WorkerMessage::Dispatch(message) => message,
+
+            Some(message) => message,
         };
 
-        match message.msg {
+        match message {
             Message::FromTun(Err(err)) => {
                 error!(%err, "read packet from tun failed");
 
-                return Err(err.into());
+                Err(err.into())
             }
 
             Message::FromTun(Ok(packet)) => {
-                let id = self.encrypt.get_id();
-                self.encrypt
-                    .send_message(FactoryMessage::Dispatch(Job {
-                        key: id,
-                        msg: packet,
-                        options: Default::default(),
-                    }))
+                self.encrypt_sender
+                    .send(EncryptMessage::Packet(packet))
+                    .await
                     .tap_err(|err| error!(%err, "send packet to encrypt failed"))?;
 
-                state.factory.send_message(FactoryMessage::Finished(
-                    self.worker_id,
-                    state.factory.get_id(),
-                ))?;
+                info!("send packet to encrypt done");
 
                 Ok(())
             }
 
             Message::ToTun(packet) => {
-                state
-                    .tun
+                self.tun
                     .write(&packet)
                     .await
                     .tap_err(|err| error!(%err, "write packet to tun failed"))?;
 
-                state.factory.send_message(FactoryMessage::Finished(
-                    self.worker_id,
-                    state.factory.get_id(),
-                ))?;
+                info!("write packet to tun done");
 
                 Ok(())
             }

@@ -6,9 +6,9 @@ use futures_channel::mpsc;
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
-use ractor::concurrency::JoinHandle;
 use rand::{thread_rng, Rng};
 use tap::TapFallible;
+use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, warn};
@@ -104,7 +104,9 @@ impl EncryptActor {
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
-        self.heartbeat_task.take().map(|task| task.abort());
+        if let Some(task) = self.heartbeat_task.take() {
+            task.abort();
+        }
 
         let state = Self::start(&self.local_private_key, self.mailbox_sender.clone()).await?;
         self.state = state;

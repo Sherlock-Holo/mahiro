@@ -459,19 +459,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dashmap"
-version = "5.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "907076dfda823b0b36d2a1bb5f90c96660a5bbcd7729e10727f07858f22c4edc"
-dependencies = [
- "cfg-if",
- "hashbrown",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
 name = "derivative"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -834,7 +821,6 @@ dependencies = [
  "once_cell",
  "prost",
  "prost-build",
- "ractor",
  "rand",
  "replace_with",
  "rtnetlink",
@@ -1292,20 +1278,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4424af4bf778aae2051a77b60283332f386554255d722233d09fbfc7e30da2fc"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "ractor"
-version = "0.8.0"
-source = "git+https://github.com/slawlor/ractor?rev=b705eb8#b705eb8b4d497b9eb24e57e22ee8943faae22659"
-dependencies = [
- "async-trait",
- "dashmap",
- "futures",
- "log",
- "once_cell",
- "rand",
- "tokio",
 ]
 
 [[package]]
