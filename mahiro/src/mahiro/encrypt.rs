@@ -2,7 +2,6 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use derivative::Derivative;
-use futures_channel::mpsc;
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
@@ -61,28 +60,25 @@ impl EncryptActor {
     pub async fn new(
         udp_sender: Sender<UdpMessage>,
         tun_sender: Sender<TunMessage>,
+        mailbox_sender: Sender<Message>,
+        mailbox: Receiver<Message>,
         heartbeat_interval: Duration,
         local_private_key: Bytes,
         remote_public_key: Bytes,
-    ) -> anyhow::Result<(Self, Sender<Message>)> {
-        let (sender, mailbox) = mpsc::channel(10);
+    ) -> anyhow::Result<Self> {
+        let state = Self::start(&local_private_key, mailbox_sender.clone()).await?;
 
-        let state = Self::start(&local_private_key, sender.clone()).await?;
-
-        Ok((
-            Self {
-                mailbox_sender: sender.clone(),
-                mailbox,
-                udp_sender,
-                tun_sender,
-                state,
-                heartbeat_interval,
-                heartbeat_task: None,
-                local_private_key,
-                remote_public_key,
-            },
-            sender,
-        ))
+        Ok(Self {
+            mailbox_sender,
+            mailbox,
+            udp_sender,
+            tun_sender,
+            state,
+            heartbeat_interval,
+            heartbeat_task: None,
+            local_private_key,
+            remote_public_key,
+        })
     }
 
     async fn start(
@@ -163,8 +159,13 @@ impl EncryptActor {
 
         match &mut self.state {
             State::Uninit { encrypt } => {
-                if let Some(new_state) =
-                    Self::handle_uninit(encrypt.take().unwrap(), &mut self.udp_sender).await?
+                if let Some(new_state) = Self::handle_uninit(
+                    encrypt.take().unwrap(),
+                    self.heartbeat_interval,
+                    &self.mailbox_sender,
+                    &mut self.udp_sender,
+                )
+                .await?
                 {
                     self.state = new_state;
 
@@ -259,6 +260,8 @@ impl EncryptActor {
 
     async fn handle_uninit(
         mut encrypt: Encrypt,
+        handshake_timeout: Duration,
+        mailbox_sender: &Sender<Message>,
         udp_sender: &mut Sender<UdpMessage>,
     ) -> anyhow::Result<Option<State>> {
         let handshake = Bytes::from(encrypt.initiator_handshake()?.to_vec());
@@ -273,6 +276,13 @@ impl EncryptActor {
             .send(UdpMessage::Frame(frame))
             .await
             .tap_err(|err| error!(%err, "send handshake frame failed"))?;
+
+        let mut mailbox_sender = mailbox_sender.clone();
+        tokio::spawn(async move {
+            time::sleep(handshake_timeout).await;
+
+            let _ = mailbox_sender.send(Message::HandshakeTimeout).await;
+        });
 
         Ok(Some(State::Handshake {
             encrypt: Some(encrypt),
@@ -513,6 +523,7 @@ fn generate_nonce() -> u64 {
 mod tests {
     use std::str::FromStr;
 
+    use futures_channel::mpsc;
     use snow::params::NoiseParams;
     use snow::{Builder, StatelessTransportState};
     use test_log::test;
@@ -531,12 +542,15 @@ mod tests {
             .unwrap();
         let mut buf = vec![0; 65535];
 
-        let (mut tun_sender, mut tun_mailbox) = mpsc::channel(10);
-        let (mut udp_sender, mut udp_mailbox) = mpsc::channel(10);
+        let (tun_sender, mut tun_mailbox) = mpsc::channel(10);
+        let (udp_sender, mut udp_mailbox) = mpsc::channel(10);
+        let (mut mailbox_sender, mailbox) = mpsc::channel(10);
 
-        let (mut encrypt_actor, mut mailbox_sender) = EncryptActor::new(
+        let mut encrypt_actor = EncryptActor::new(
             udp_sender,
             tun_sender.clone(),
+            mailbox_sender.clone(),
+            mailbox,
             Duration::from_secs(10),
             initiator_keypair.private.into(),
             responder_keypair.public.into(),

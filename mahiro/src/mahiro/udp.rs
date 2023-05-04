@@ -2,7 +2,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::{Buf, BytesMut};
-use futures_channel::mpsc;
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
@@ -31,13 +30,13 @@ pub struct UdpActor {
 impl UdpActor {
     pub async fn new(
         encrypt_sender: Sender<EncryptMessage>,
+        mailbox_sender: Sender<Message>,
+        mailbox: Receiver<Message>,
         remote_addr: SocketAddr,
-    ) -> anyhow::Result<(Self, Sender<Message>)> {
-        let (sender, mailbox) = mpsc::channel(10);
-
-        let (udp_socket, read_task) = Self::start(remote_addr, sender.clone()).await?;
+    ) -> anyhow::Result<Self> {
+        let (udp_socket, read_task) = Self::start(remote_addr, mailbox_sender.clone()).await?;
         let udp_actor = Self {
-            mailbox_sender: sender.clone(),
+            mailbox_sender,
             mailbox,
             encrypt_sender,
             remote_addr,
@@ -45,7 +44,7 @@ impl UdpActor {
             read_task,
         };
 
-        Ok((udp_actor, sender))
+        Ok(udp_actor)
     }
 
     async fn start(
@@ -194,8 +193,10 @@ mod tests {
         let addr = server.local_addr().unwrap();
 
         let (encrypt_sender, mut encrypt_mailbox) = mpsc::channel(10);
-        let (mut udp_actor, mut mailbox_sender) =
-            UdpActor::new(encrypt_sender, addr).await.unwrap();
+        let (mut mailbox_sender, mailbox) = mpsc::channel(10);
+        let mut udp_actor = UdpActor::new(encrypt_sender, mailbox_sender.clone(), mailbox, addr)
+            .await
+            .unwrap();
         tokio::spawn(async move { udp_actor.run().await });
 
         let frame = Frame {

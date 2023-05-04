@@ -1,10 +1,12 @@
 use std::fmt::Debug;
+use std::future;
+use std::io::ErrorKind;
 use std::net::IpAddr;
 
 use derivative::Derivative;
 use futures_util::TryStreamExt;
 use netlink_packet_route::rule::Nla;
-use netlink_packet_route::{RuleMessage, AF_INET, AF_INET6};
+use netlink_packet_route::{RuleMessage, AF_INET, AF_INET6, FR_ACT_TO_TBL};
 use rtnetlink::{Handle, IpVersion, LinkHandle, RouteHandle, RuleHandle};
 use tap::TapFallible;
 use tracing::{error, info, instrument};
@@ -36,7 +38,7 @@ impl RouteTable {
     }
 
     #[instrument(err)]
-    pub async fn clean_route_tables(&self, fwmark: u32) -> anyhow::Result<()> {
+    pub async fn clean_route_tables(&self) -> anyhow::Result<()> {
         for table in [TABLE_ID1, TABLE_ID2] {
             for ip_version in [IpVersion::V4, IpVersion::V6] {
                 self.flush_route(table, ip_version.clone()).await?;
@@ -48,15 +50,27 @@ impl RouteTable {
                     IpVersion::V4 => AF_INET as _,
                     IpVersion::V6 => AF_INET6 as _,
                 };
-                rule_message.nlas = vec![Nla::FwMark(fwmark), Nla::Table(table as _)];
+                rule_message.nlas = vec![Nla::Table(table as _)];
 
-                self.rule_handle
-                    .del(rule_message)
-                    .execute()
-                    .await
-                    .tap_err(|err| error!(%err, table, ?ip_version, "delete route rule failed"))?;
+                match self.rule_handle.del(rule_message).execute().await {
+                    Err(rtnetlink::Error::NetlinkError(err_msg))
+                        if err_msg.to_io().kind() == ErrorKind::NotFound =>
+                    {
+                        info!("a route rule not exists, ignore it");
 
-                info!(table, ?ip_version, "delete route rule done");
+                        continue;
+                    }
+
+                    Err(err) => {
+                        error!(%err, table, ?ip_version, "delete route rule failed");
+
+                        return Err(err.into());
+                    }
+
+                    Ok(_) => {
+                        info!(table, ?ip_version, "delete route rule done");
+                    }
+                }
             }
         }
 
@@ -64,11 +78,7 @@ impl RouteTable {
     }
 
     #[instrument(err)]
-    pub async fn update_route(
-        &mut self,
-        fwmark: u32,
-        route_entries: &[RouteEntry],
-    ) -> anyhow::Result<()> {
+    pub async fn update_route(&mut self, new_route_entries: &[RouteEntry]) -> anyhow::Result<()> {
         let old_table_id = self.current_table_id;
         let new_table_id = if old_table_id == TABLE_ID1 {
             TABLE_ID2
@@ -76,55 +86,76 @@ impl RouteTable {
             TABLE_ID1
         };
 
-        self.add_route_entries(new_table_id, route_entries).await?;
+        self.add_route_entries(new_table_id, new_route_entries)
+            .await?;
 
-        info!(new_table_id, ?route_entries, "add route entries done");
+        info!(new_table_id, ?new_route_entries, "add route entries done");
 
-        let mut rule_add_request = self.rule_handle.add().v4();
-        rule_add_request.message_mut().nlas =
-            vec![Nla::FwMark(fwmark), Nla::Table(new_table_id as _)];
-
-        rule_add_request
+        self.rule_handle
+            .add()
+            .v4()
+            .action(FR_ACT_TO_TBL)
+            .table(new_table_id as _)
             .execute()
             .await
-            .tap_err(|err| error!(%err, fwmark, new_table_id, "add ipv4 route rule failed"))?;
+            .tap_err(|err| error!(%err, new_table_id, "add ipv4 route rule failed"))?;
 
-        info!(fwmark, new_table_id, "add ipv4 route rule done");
+        info!(new_table_id, "add ipv4 route rule done");
 
-        let mut rule_add_request = self.rule_handle.add().v6();
-        rule_add_request.message_mut().nlas =
-            vec![Nla::FwMark(fwmark), Nla::Table(new_table_id as _)];
-
-        rule_add_request
+        self.rule_handle
+            .add()
+            .v6()
+            .action(FR_ACT_TO_TBL)
+            .table(new_table_id as _)
             .execute()
             .await
-            .tap_err(|err| error!(%err, fwmark, new_table_id, "update ipv6 route rule failed"))?;
+            .tap_err(|err| error!(%err, new_table_id, "update ipv6 route rule failed"))?;
 
-        info!(fwmark, new_table_id, "add ipv6 route rule done");
+        info!(new_table_id, "add ipv6 route rule done");
 
         let mut delete_rule_message = RuleMessage::default();
         delete_rule_message.header.family = AF_INET as _;
-        delete_rule_message.nlas = vec![Nla::FwMark(fwmark), Nla::Table(old_table_id as _)];
+        delete_rule_message.nlas = vec![Nla::Table(old_table_id as _)];
 
-        self.rule_handle
-            .del(delete_rule_message)
-            .execute()
-            .await
-            .tap_err(|err| error!(%err, fwmark, old_table_id, "delete ipv4 route rule failed"))?;
+        match self.rule_handle.del(delete_rule_message).execute().await {
+            Err(rtnetlink::Error::NetlinkError(err_msg))
+                if err_msg.to_io().kind() == ErrorKind::NotFound =>
+            {
+                info!("an ipv4 route rule not exists, ignore it");
+            }
+
+            Err(err) => {
+                error!(%err, old_table_id, "delete ipv4 route rule failed");
+
+                return Err(err.into());
+            }
+
+            Ok(_) => {
+                info!(old_table_id, "delete ipv4 route rule done");
+            }
+        }
 
         let mut delete_rule_message = RuleMessage::default();
         delete_rule_message.header.family = AF_INET6 as _;
-        delete_rule_message.nlas = vec![Nla::FwMark(fwmark), Nla::Table(old_table_id as _)];
+        delete_rule_message.nlas = vec![Nla::Table(old_table_id as _)];
 
-        info!(fwmark, old_table_id, "delete ipv4 route rule done");
+        match self.rule_handle.del(delete_rule_message).execute().await {
+            Err(rtnetlink::Error::NetlinkError(err_msg))
+                if err_msg.to_io().kind() == ErrorKind::NotFound =>
+            {
+                info!("an ipv6 route rule not exists, ignore it");
+            }
 
-        self.rule_handle
-            .del(delete_rule_message)
-            .execute()
-            .await
-            .tap_err(|err| error!(%err, fwmark, old_table_id, "delete ipv6 route rule failed"))?;
+            Err(err) => {
+                error!(%err, old_table_id, "delete ipv6 route rule failed");
 
-        info!(fwmark, old_table_id, "delete ipv6 route rule done");
+                return Err(err.into());
+            }
+
+            Ok(_) => {
+                info!(old_table_id, "delete ipv6 route rule done");
+            }
+        }
 
         for ip_version in [IpVersion::V4, IpVersion::V6] {
             self.flush_route(old_table_id, ip_version.clone()).await?;
@@ -194,17 +225,23 @@ impl RouteTable {
 
     #[instrument(err)]
     async fn flush_route(&self, table: u8, ip_version: IpVersion) -> anyhow::Result<()> {
-        let mut get_request = self.route_handle.get(ip_version.clone());
-        get_request.message_mut().header.table = table;
-        let route_rules = get_request
+        let get_request = self.route_handle.get(ip_version.clone());
+
+        let route_entries = get_request
             .execute()
+            .try_filter(|route_entry| future::ready(route_entry.header.table == table))
             .try_collect::<Vec<_>>()
             .await
             .tap_err(|err| error!(%err, ?ip_version, table, "collect table entry failed"))?;
 
-        info!(table, ?ip_version, ?route_rules, "collect table rule done");
+        info!(
+            table,
+            ?ip_version,
+            ?route_entries,
+            "collect table rule done"
+        );
 
-        for route_rule in route_rules {
+        for route_rule in route_entries {
             self.route_handle
                 .del(route_rule)
                 .execute()

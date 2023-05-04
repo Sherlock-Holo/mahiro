@@ -8,7 +8,9 @@ use cidr::{Ipv4Inet, Ipv6Inet};
 use derivative::Derivative;
 use futures_util::TryStreamExt;
 use rtnetlink::Handle;
+use tap::TapFallible;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tracing::{error, info};
 use tun::AsyncDevice;
 
 const MTU: u32 = 1400;
@@ -70,13 +72,25 @@ impl Tun {
         address_handle
             .add(tun_index, IpAddr::V4(ipv4.address()), ipv4.network_length())
             .execute()
-            .await?;
+            .await
+            .tap_err(|err| error!(%err, "add ipv4 addr failed"))?;
         address_handle
             .add(tun_index, IpAddr::V6(ipv6.address()), ipv6.network_length())
             .execute()
-            .await?;
+            .await
+            .tap_err(|err| error!(%err, "addr ipv6 addr failed"))?;
 
-        link_handle.set(tun_index).mtu(MTU).up().execute().await?;
+        info!("add ipv4 and ipv6 addr done");
+
+        link_handle
+            .set(tun_index)
+            .mtu(MTU)
+            .up()
+            .execute()
+            .await
+            .tap_err(|err| error!(%err, MTU, "set tun MTU and up failed"))?;
+
+        info!(MTU, "set tun MTU and up done");
 
         Ok(())
     }

@@ -39,6 +39,7 @@ tun = { version = "0.5", features = ["async"] }
 rtnetlink = "0.12"
 netlink-packet-route = "0.15"
 cidr = "0.2"
+network-types = "0.0"
 
 # transport data
 prost = "0.11"
@@ -51,6 +52,7 @@ tracing-subscriber = "0.3"
 test-log = { version = "0.2", default-features = false, features = ["trace"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 replace_with = "0.1"
+nix = "0.26"
 
 [build-dependencies]
 prost-build = "0.11"

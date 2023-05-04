@@ -1,6 +1,5 @@
 use bytes::{Buf, BytesMut};
 use cidr::{Ipv4Inet, Ipv6Inet};
-use futures_channel::mpsc;
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
 use rtnetlink::Handle;
@@ -17,13 +16,12 @@ use crate::tun::Tun;
 use super::message::TunMessage as Message;
 
 #[derive(Debug)]
-struct TunConfig {
-    tun_ipv4: Ipv4Inet,
-    tun_ipv6: Ipv6Inet,
-    tun_name: String,
-    netlink_handle: Handle,
-    route_entries: Vec<RouteEntry>,
-    fwmark: u32,
+pub struct TunConfig {
+    pub tun_ipv4: Ipv4Inet,
+    pub tun_ipv6: Ipv6Inet,
+    pub tun_name: String,
+    pub netlink_handle: Handle,
+    pub route_entries: Vec<RouteEntry>,
 }
 
 #[derive(Debug)]
@@ -42,38 +40,22 @@ pub struct TunActor {
 impl TunActor {
     pub async fn new(
         encrypt_sender: Sender<EncryptMessage>,
-        tun_ipv4: Ipv4Inet,
-        tun_ipv6: Ipv6Inet,
-        tun_name: String,
-        netlink_handle: Handle,
-        route_entries: Vec<RouteEntry>,
-        fwmark: u32,
-    ) -> anyhow::Result<(Self, Sender<Message>)> {
-        let tun_config = TunConfig {
-            tun_ipv4,
-            tun_ipv6,
-            tun_name,
-            netlink_handle,
-            route_entries,
-            fwmark,
-        };
+        mailbox_sender: Sender<Message>,
+        mailbox: Receiver<Message>,
+        tun_config: TunConfig,
+    ) -> anyhow::Result<Self> {
+        let (tun, route_table, read_task) =
+            Self::start(mailbox_sender.clone(), &tun_config).await?;
 
-        let (sender, mailbox) = mpsc::channel(10);
-
-        let (tun, route_table, read_task) = Self::start(sender.clone(), &tun_config).await?;
-
-        Ok((
-            Self {
-                mailbox_sender: sender.clone(),
-                mailbox,
-                encrypt_sender,
-                tun_config,
-                tun,
-                route_table,
-                read_task,
-            },
-            sender,
-        ))
+        Ok(Self {
+            mailbox_sender,
+            mailbox,
+            encrypt_sender,
+            tun_config,
+            tun,
+            route_table,
+            read_task,
+        })
     }
 
     async fn start(
@@ -93,17 +75,13 @@ impl TunActor {
 
         let mut route_table = RouteTable::new(tun_config.netlink_handle.clone());
 
-        let fwmark = tun_config.fwmark;
+        route_table.clean_route_tables().await?;
 
-        route_table.clean_route_tables(fwmark).await?;
+        info!("clean route tables done");
 
-        info!(fwmark, "clean route tables done");
+        route_table.update_route(&tun_config.route_entries).await?;
 
-        route_table
-            .update_route(fwmark, &tun_config.route_entries)
-            .await?;
-
-        info!(fwmark, route_entries = ?tun_config.route_entries, "update route done");
+        info!(route_entries = ?tun_config.route_entries, "update route done");
 
         let (tun_read, tun_write) = io::split(tun);
 
@@ -217,5 +195,86 @@ impl TunActor {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::size_of;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::str::FromStr;
+
+    use futures_channel::mpsc;
+    use network_types::ip::{IpProto, Ipv4Hdr};
+    use network_types::udp::UdpHdr;
+    use nix::unistd::getuid;
+    use test_log::test;
+    use tokio::net::UdpSocket;
+    use tracing::warn;
+
+    use super::*;
+
+    #[test(tokio::test)]
+    async fn test() {
+        if !getuid().is_root() {
+            warn!("ignore tun test when is not root");
+
+            return;
+        }
+
+        let (connection, handle, _) = rtnetlink::new_connection().unwrap();
+        tokio::spawn(connection);
+
+        let tun_config = TunConfig {
+            tun_ipv4: Ipv4Inet::new(Ipv4Addr::new(192, 168, 1, 1), 24).unwrap(),
+            tun_ipv6: Ipv6Inet::new(Ipv6Addr::from_str("fc00:100::1").unwrap(), 64).unwrap(),
+            tun_name: "test_tun".to_string(),
+            netlink_handle: handle,
+            route_entries: vec![],
+        };
+
+        let (mailbox_sender, mailbox) = mpsc::channel(10);
+        let (encrypt_sender, mut encrypt_mailbox) = mpsc::channel(10);
+        let mut tun_actor =
+            TunActor::new(encrypt_sender, mailbox_sender.clone(), mailbox, tun_config)
+                .await
+                .unwrap();
+
+        tokio::spawn(async move { tun_actor.run().await });
+
+        // time::sleep(Duration::from_secs(3600)).await;
+
+        let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        udp_socket.connect("192.168.1.2:8888").await.unwrap();
+        udp_socket.send(b"test").await.unwrap();
+
+        let packet = loop {
+            let encrypt_message = encrypt_mailbox.next().await.unwrap();
+            let packet = match encrypt_message {
+                EncryptMessage::Packet(packet) => packet,
+                _ => panic!("other encrypt message"),
+            };
+            let first = packet[0];
+            if (first >> 4) != 0b100 {
+                continue;
+            }
+
+            // safety: the packet is an ipv4 packet
+            let ipv4_hdr = unsafe { &*(packet.as_ptr() as *const Ipv4Hdr) };
+            if Ipv4Addr::from(u32::from_be(ipv4_hdr.dst_addr)) != Ipv4Addr::new(192, 168, 1, 2) {
+                continue;
+            }
+
+            if ipv4_hdr.proto != IpProto::Udp {
+                continue;
+            }
+
+            let udp_hdr = unsafe { &*(packet.as_ptr().add(size_of::<Ipv4Hdr>()) as *const UdpHdr) };
+            if u16::from_be(udp_hdr.dest) != 8888 {
+                continue;
+            }
+
+            break packet;
+        };
     }
 }
