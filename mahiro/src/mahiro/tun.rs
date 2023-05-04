@@ -248,7 +248,7 @@ mod tests {
         udp_socket.connect("192.168.1.2:8888").await.unwrap();
         udp_socket.send(b"test").await.unwrap();
 
-        let packet = loop {
+        loop {
             let encrypt_message = encrypt_mailbox.next().await.unwrap();
             let packet = match encrypt_message {
                 EncryptMessage::Packet(packet) => packet,
@@ -274,7 +274,7 @@ mod tests {
                 continue;
             }
 
-            break packet;
-        };
+            return;
+        }
     }
 }

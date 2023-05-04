@@ -7,9 +7,9 @@ build = "build.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "fs"] }
 async-trait = "0.1"
-tokio-stream = { version = "0.1", features = ["time"] }
+tokio-stream = { version = "0.1", features = ["time", "io-util"] }
 futures-util = "0.3"
 futures-channel = "0.3"
 once_cell = "1"
@@ -33,6 +33,9 @@ aya-log = { git = "https://github.com/aya-rs/aya", tag = "aya-log-v0.1.13" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+serde_with = "2.3"
+humantime = "2"
+base64 = "0.21"
 
 # tun device
 tun = { version = "0.5", features = ["async"] }

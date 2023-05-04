@@ -1,4 +1,4 @@
 #[tokio::main]
-async fn main() {
-    println!("Hello, world!");
+async fn main() -> anyhow::Result<()> {
+    mahiro::run().await
 }

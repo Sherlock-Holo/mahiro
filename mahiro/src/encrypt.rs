@@ -12,19 +12,19 @@ static NOISE_PARAMS: Lazy<NoiseParams> =
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("init encrypt error: {0}")]
-    InitEncryptError(snow::Error),
+    InitEncrypt(snow::Error),
 
     #[error("handshake error: {0}")]
-    HandshakeError(snow::Error),
+    Handshake(snow::Error),
 
     #[error("convert into transport mode error: {0}")]
-    IntoTransportError(snow::Error),
+    IntoTransport(snow::Error),
 
     #[error("encrypt failed: {0}")]
-    EncryptError(snow::Error),
+    Encrypt(snow::Error),
 
     #[error("decrypt failed: {0}")]
-    DecryptError(snow::Error),
+    Decrypt(snow::Error),
 }
 
 #[derive(Debug)]
@@ -52,7 +52,7 @@ impl Encrypt {
         let state = Builder::new(NOISE_PARAMS.clone())
             .local_private_key(local_private_key)
             .build_initiator()
-            .map_err(Error::InitEncryptError)?;
+            .map_err(Error::InitEncrypt)?;
 
         Ok(Self {
             state: State::Handshake(Box::new(state), vec![0; BUFFER_SIZE]),
@@ -65,7 +65,7 @@ impl Encrypt {
         let state = Builder::new(NOISE_PARAMS.clone())
             .local_private_key(local_private_key)
             .build_responder()
-            .map_err(Error::InitEncryptError)?;
+            .map_err(Error::InitEncrypt)?;
 
         Ok(Self {
             state: State::Handshake(Box::new(state), vec![0; BUFFER_SIZE]),
@@ -79,7 +79,7 @@ impl Encrypt {
                 let transport_state = state.into_stateless_transport_mode().map_err(|err| {
                     error!(%err, "convert transport mode failed");
 
-                    Error::IntoTransportError(err)
+                    Error::IntoTransport(err)
                 })?;
 
                 Ok(Self {
@@ -102,7 +102,7 @@ impl Encrypt {
                 let n = state.write_message(nonce, data, buffer).map_err(|err| {
                     error!(%err, "encrypt data failed");
 
-                    Error::EncryptError(err)
+                    Error::Encrypt(err)
                 })?;
 
                 Ok(n)
@@ -120,7 +120,7 @@ impl Encrypt {
                 let n = state.read_message(nonce, data, buffer).map_err(|err| {
                     error!(%err, "decrypt data failed");
 
-                    Error::DecryptError(err)
+                    Error::Decrypt(err)
                 })?;
 
                 Ok(n)
@@ -136,7 +136,7 @@ impl Encrypt {
                 let n = state.write_message(&[], buffer).map_err(|err| {
                     error!(%err, "get initiator handshake data failed");
 
-                    Error::HandshakeError(err)
+                    Error::Handshake(err)
                 })?;
 
                 Ok(&buffer[..n])
@@ -225,7 +225,7 @@ impl Encrypt {
                 let n = state.write_message(&[], buffer).map_err(|err| {
                     error!(%err, "get responder handshake response data failed");
 
-                    Error::HandshakeError(err)
+                    Error::Handshake(err)
                 })?;
 
                 Ok(&buffer[..n])
