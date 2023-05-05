@@ -5,7 +5,6 @@ use derivative::Derivative;
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
-use rand::{thread_rng, Rng};
 use tap::TapFallible;
 use tokio::task::JoinHandle;
 use tokio::time;
@@ -16,12 +15,12 @@ use crate::encrypt::{Encrypt, HandshakeState};
 use crate::mahiro::message::{TunMessage, UdpMessage};
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
-use crate::HEARTBEAT_DATA;
+use crate::{util, HEARTBEAT_DATA};
 
 use super::message::EncryptMessage as Message;
 
 #[derive(Derivative)]
-#[derivative]
+#[derivative(Debug)]
 enum State {
     Uninit {
         encrypt: Option<Encrypt>,
@@ -49,7 +48,7 @@ impl Drop for State {
 }
 
 #[derive(Derivative)]
-#[derivative]
+#[derivative(Debug)]
 pub struct EncryptActor {
     mailbox_sender: Sender<Message>,
     mailbox: Receiver<Message>,
@@ -367,7 +366,7 @@ impl EncryptActor {
         encrypt: &Encrypt,
         udp_sender: &mut Sender<UdpMessage>,
     ) -> anyhow::Result<()> {
-        let nonce = generate_nonce();
+        let nonce = util::generate_nonce();
         let data = FrameData {
             data_or_heartbeat: Some(DataOrHeartbeat::Data(packet)),
         }
@@ -450,7 +449,7 @@ impl EncryptActor {
                             }
                             .encode_to_vec();
 
-                            let nonce = generate_nonce();
+                            let nonce = util::generate_nonce();
                             let n = encrypt.encrypt(nonce, &pong_frame_data, buffer)?;
                             let pong_data = Bytes::copy_from_slice(&buffer[..n]);
                             let frame = Frame {
@@ -498,7 +497,7 @@ impl EncryptActor {
             data_or_heartbeat: Some(DataOrHeartbeat::Ping(Bytes::from_static(HEARTBEAT_DATA))),
         }
         .encode_to_vec();
-        let nonce = generate_nonce();
+        let nonce = util::generate_nonce();
 
         let n = encrypt.encrypt(nonce, &ping_frame_data, buffer)?;
 
@@ -515,10 +514,6 @@ impl EncryptActor {
 
         Ok(())
     }
-}
-
-fn generate_nonce() -> u64 {
-    thread_rng().gen()
 }
 
 #[cfg(test)]
@@ -617,7 +612,7 @@ mod tests {
             data_or_heartbeat: Some(DataOrHeartbeat::Data(Bytes::from_static(b"mihari"))),
         }
         .encode_to_vec();
-        let nonce = generate_nonce();
+        let nonce = util::generate_nonce();
         let n = transport_state
             .write_message(nonce, &frame_data, &mut buf)
             .unwrap();

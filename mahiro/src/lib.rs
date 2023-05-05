@@ -19,6 +19,7 @@ mod mihari;
 mod protocol;
 mod route_table;
 mod tun;
+mod util;
 
 const HEARTBEAT_DATA: &[u8] = b"onimai";
 

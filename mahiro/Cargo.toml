@@ -24,6 +24,7 @@ tap = "1"
 # noise encrypt
 snow = "0.9"
 rand = "0.8"
+dashmap = "5"
 
 # bpf
 aya = { git = "https://github.com/aya-rs/aya", tag = "aya-log-v0.1.13", features = ["async_tokio"] }
