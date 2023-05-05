@@ -30,12 +30,22 @@ enum State {
     Handshake {
         encrypt: Option<Encrypt>,
     },
+
     Transport {
-        encrypt: Option<Encrypt>,
+        encrypt: Encrypt,
         #[derivative(Debug = "ignore")]
         buffer: Vec<u8>,
         heartbeat_receive_instant: Instant,
+        heartbeat_task: JoinHandle<()>,
     },
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        if let Self::Transport { heartbeat_task, .. } = self {
+            heartbeat_task.abort();
+        }
+    }
 }
 
 #[derive(Derivative)]
@@ -48,7 +58,6 @@ pub struct EncryptActor {
 
     state: State,
     heartbeat_interval: Duration,
-    heartbeat_task: Option<JoinHandle<()>>,
 
     #[derivative(Debug = "ignore")]
     local_private_key: Bytes,
@@ -75,7 +84,6 @@ impl EncryptActor {
             tun_sender,
             state,
             heartbeat_interval,
-            heartbeat_task: None,
             local_private_key,
             remote_public_key,
         })
@@ -100,10 +108,6 @@ impl EncryptActor {
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
-        if let Some(task) = self.heartbeat_task.take() {
-            task.abort();
-        }
-
         let state = Self::start(&self.local_private_key, self.mailbox_sender.clone()).await?;
         self.state = state;
 
@@ -182,7 +186,6 @@ impl EncryptActor {
                     &self.remote_public_key,
                     self.heartbeat_interval,
                     self.mailbox_sender.clone(),
-                    &mut self.heartbeat_task,
                 )
                 .await?
                 {
@@ -198,9 +201,8 @@ impl EncryptActor {
                 encrypt,
                 buffer,
                 heartbeat_receive_instant,
+                ..
             } => {
-                let encrypt = encrypt.as_mut().unwrap();
-
                 match message {
                     Message::Init | Message::HandshakeTimeout => {
                         // drop init or handshake timeout message when actor is transport
@@ -295,7 +297,6 @@ impl EncryptActor {
         remote_public_key: &[u8],
         heartbeat_interval: Duration,
         mailbox_sender: Sender<Message>,
-        heartbeat_task: &mut Option<JoinHandle<()>>,
     ) -> anyhow::Result<Option<State>> {
         let data = match message {
             Message::Init | Message::Packet(_) | Message::Heartbeat => {
@@ -346,14 +347,15 @@ impl EncryptActor {
                 let mut encrypt = encrypt.take().unwrap();
                 encrypt = encrypt.into_transport_mode()?;
 
-                heartbeat_task.replace(tokio::spawn(async move {
+                let heartbeat_task = tokio::spawn(async move {
                     Self::heartbeat(heartbeat_interval, mailbox_sender).await
-                }));
+                });
 
                 Ok(Some(State::Transport {
-                    encrypt: Some(encrypt),
+                    encrypt,
                     buffer: vec![0; 65535],
                     heartbeat_receive_instant: Instant::now(),
+                    heartbeat_task,
                 }))
             }
         };
