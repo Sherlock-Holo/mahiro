@@ -9,11 +9,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 
+use super::message::TunMessage as Message;
 use crate::mahiro::message::EncryptMessage;
 use crate::route_table::{RouteEntry, RouteTable};
 use crate::tun::Tun;
-
-use super::message::TunMessage as Message;
 
 #[derive(Debug)]
 pub struct TunConfig {

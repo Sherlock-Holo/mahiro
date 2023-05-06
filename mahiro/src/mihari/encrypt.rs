@@ -8,20 +8,18 @@ use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
 use tap::TapFallible;
-use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, warn};
 
+use super::message::EncryptMessage as Message;
+use super::message::{TunMessage, UdpMessage};
+use super::public_key::PublicKey;
 use crate::encrypt::{Encrypt, HandshakeState};
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::{util, HEARTBEAT_DATA};
-
-use super::message::EncryptMessage as Message;
-use super::message::{TunMessage, UdpMessage};
-use super::public_key::PublicKey;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -49,7 +47,6 @@ pub struct EncryptActor {
     mailbox: Receiver<Message>,
     udp_sender: Sender<UdpMessage>,
     tun_sender: Sender<TunMessage>,
-    timeout_notify: Notify,
 
     state: State,
     heartbeat_interval: Duration,
@@ -62,13 +59,12 @@ impl EncryptActor {
         mailbox: Receiver<Message>,
         udp_sender: Sender<UdpMessage>,
         tun_sender: Sender<TunMessage>,
-        timeout_notify: Notify,
         local_private_key: Bytes,
         frame: Frame,
         from: SocketAddr,
         heartbeat_interval: Duration,
         remote_public_keys: &DashSet<PublicKey>,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<(Self, Frame)> {
         match frame.r#type() {
             FrameType::Transport => {
                 error!("unexpected transport frame");
@@ -106,39 +102,28 @@ impl EncryptActor {
 
                         encrypt = encrypt.into_transport_mode()?;
 
-                        {
-                            let mut udp_sender = udp_sender.clone();
-                            tokio::spawn(async move {
-                                udp_sender
-                                    .send(UdpMessage::Frame {
-                                        frame: handshake_response_frame,
-                                        to: from,
-                                    })
-                                    .await
-                                    .tap_err(|err| error!(%err, "send handshake response failed"))
-                            });
-                        }
-
                         let heartbeat_task = {
                             let mailbox_sender = mailbox_sender.clone();
                             tokio::spawn(Self::heartbeat(heartbeat_interval, mailbox_sender))
                         };
 
-                        Ok(Self {
-                            mailbox_sender,
-                            mailbox,
-                            udp_sender,
-                            tun_sender,
-                            timeout_notify,
-                            state: State::Transport {
-                                encrypt,
-                                buffer: vec![0; 65535],
-                                heartbeat_receive_instant: Instant::now(),
-                                heartbeat_task,
-                                remote_addr: from,
+                        Ok((
+                            Self {
+                                mailbox_sender,
+                                mailbox,
+                                udp_sender,
+                                tun_sender,
+                                state: State::Transport {
+                                    encrypt,
+                                    buffer: vec![0; 65535],
+                                    heartbeat_receive_instant: Instant::now(),
+                                    heartbeat_task,
+                                    remote_addr: from,
+                                },
+                                heartbeat_interval,
                             },
-                            heartbeat_interval,
-                        })
+                            handshake_response_frame,
+                        ))
                     }
                 }
             }
@@ -232,7 +217,6 @@ impl EncryptActor {
                             self.heartbeat_interval,
                             heartbeat_receive_instant,
                             &mut self.udp_sender,
-                            &self.timeout_notify,
                         )
                         .await?;
 
@@ -374,12 +358,9 @@ impl EncryptActor {
         heartbeat_interval: Duration,
         heartbeat_receive_instant: &mut Instant,
         udp_sender: &mut Sender<UdpMessage>,
-        timeout_notify: &Notify,
     ) -> anyhow::Result<()> {
         if heartbeat_receive_instant.elapsed() > heartbeat_interval * 2 {
             error!("heartbeat timeout");
-
-            timeout_notify.notify_one();
 
             return Err(anyhow::anyhow!("heartbeat timeout"));
         }

@@ -10,13 +10,12 @@ use network_types::ip::{IpProto, Ipv4Hdr};
 use network_types::tcp::TcpHdr;
 use network_types::udp::UdpHdr;
 
+use super::{MAX_LOCAL_IP_RULE_SIZE, NIC_IP_MAP_SIZE};
 use crate::conntrack::ipv4::{ConntrackEntry, ConntrackKey, ConntrackPair};
 use crate::conntrack::{ipv4 as ipv4_conntrack, ConntrackType, ProtocolType};
 use crate::context_ext::ContextExt;
 use crate::ip_addr::Ipv4Addr;
 use crate::nat::{ipv4, L4Hdr};
-
-use super::{MAX_LOCAL_IP_RULE_SIZE, NIC_IP_MAP_SIZE};
 
 #[map]
 static NIC_IPV4_MAP: HashMap<u32, Ipv4Addr> = HashMap::with_max_entries(NIC_IP_MAP_SIZE, 0);

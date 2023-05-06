@@ -10,10 +10,9 @@ use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tracing::{error, info, instrument};
 
-use crate::protocol::Frame;
-
 use super::message::EncryptMessage;
 use super::message::UdpMessage as Message;
+use crate::protocol::Frame;
 
 #[derive(Debug)]
 pub struct UdpActor {
@@ -183,9 +182,8 @@ mod tests {
     use futures_util::StreamExt;
     use test_log::test;
 
-    use crate::protocol::FrameType;
-
     use super::*;
+    use crate::protocol::FrameType;
 
     #[test(tokio::test)]
     async fn test() {

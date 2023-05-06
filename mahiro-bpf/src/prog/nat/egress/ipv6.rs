@@ -10,13 +10,12 @@ use network_types::ip::{IpProto, Ipv6Hdr};
 use network_types::tcp::TcpHdr;
 use network_types::udp::UdpHdr;
 
+use super::{MAX_LOCAL_IP_RULE_SIZE, NIC_IP_MAP_SIZE};
 use crate::conntrack::ipv6::{self as ipv6_conntrack, ConntrackEntry, ConntrackKey, ConntrackPair};
 use crate::conntrack::{ConntrackType, ProtocolType};
 use crate::context_ext::ContextExt;
 use crate::ip_addr::Ipv6Addr;
 use crate::nat::{ipv6, L4Hdr};
-
-use super::{MAX_LOCAL_IP_RULE_SIZE, NIC_IP_MAP_SIZE};
 
 #[map]
 static NIC_IPV6_MAP: HashMap<u32, Ipv6Addr> = HashMap::with_max_entries(NIC_IP_MAP_SIZE, 0);

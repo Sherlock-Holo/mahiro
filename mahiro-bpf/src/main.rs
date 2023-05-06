@@ -4,7 +4,6 @@
 use aya_bpf::bindings::TC_ACT_SHOT;
 use aya_bpf::macros::classifier;
 use aya_bpf::programs::TcContext;
-
 use mahiro_bpf::prog::nat::{egress, ingress};
 
 #[classifier(name = "snat_egress")]

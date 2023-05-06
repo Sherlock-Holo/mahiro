@@ -3,9 +3,8 @@ use aya_bpf::helpers::bpf_ktime_get_boot_ns;
 use aya_bpf::macros::map;
 use aya_bpf::maps::LruHashMap;
 
-use crate::ip_addr::Ipv4Addr;
-
 use super::{ConntrackType, Error, ProtocolType, MAX_CONNTRACK_TABLE_SIZE};
+use crate::ip_addr::Ipv4Addr;
 
 #[map]
 static IPV4_SNAT_CONNTRACK_TABLE: LruHashMap<ConntrackKey, ConntrackEntry> =

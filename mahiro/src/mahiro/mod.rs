@@ -5,12 +5,11 @@ use cidr::{Ipv4Inet, Ipv6Inet};
 use futures_channel::mpsc;
 use tokio::fs;
 
-use crate::route_table::RouteEntry;
-
 use self::config::Config;
 use self::encrypt::EncryptActor;
 use self::tun::{TunActor, TunConfig};
 use self::udp::UdpActor;
+use crate::route_table::RouteEntry;
 
 mod config;
 mod encrypt;

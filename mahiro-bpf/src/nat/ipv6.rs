@@ -6,9 +6,8 @@ use aya_bpf::helpers::bpf_csum_diff;
 use aya_bpf::programs::TcContext;
 use network_types::ip::Ipv6Hdr;
 
-use crate::ip_addr::Ipv6Addr;
-
 use super::{update_l4_csum, Error, IpAddrType, L4Hdr};
+use crate::ip_addr::Ipv6Addr;
 
 pub fn ipv6_dnat(
     ctx: &TcContext,

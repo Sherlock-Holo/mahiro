@@ -11,13 +11,12 @@ use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, warn};
 
+use super::message::EncryptMessage as Message;
 use crate::encrypt::{Encrypt, HandshakeState};
 use crate::mahiro::message::{TunMessage, UdpMessage};
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::{util, HEARTBEAT_DATA};
-
-use super::message::EncryptMessage as Message;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
