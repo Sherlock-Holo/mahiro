@@ -14,7 +14,7 @@ pub enum EncryptMessage {
 
 pub enum UdpMessage {
     Frame { frame: Frame, to: SocketAddr },
-    Packet(io::Result<Bytes>),
+    Packet(io::Result<(Bytes, SocketAddr)>),
 }
 
 pub enum TunMessage {
