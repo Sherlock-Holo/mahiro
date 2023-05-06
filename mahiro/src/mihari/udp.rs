@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::{Buf, Bytes, BytesMut};
-use dashmap::{DashMap, DashSet};
+use dashmap::DashSet;
 use futures_channel::mpsc;
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
@@ -13,6 +13,7 @@ use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tracing::{error, info, instrument};
 
+use super::connected_peer::ConnectedPeers;
 use super::encrypt::EncryptActor;
 use super::message::UdpMessage as Message;
 use super::message::{EncryptMessage, TunMessage};
@@ -23,7 +24,7 @@ use crate::protocol::Frame;
 pub struct UdpActor {
     mailbox_sender: Sender<Message>,
     mailbox: Receiver<Message>,
-    connected_peers: Arc<DashMap<SocketAddr, Sender<EncryptMessage>>>,
+    connected_peers: ConnectedPeers,
     tun_sender: Sender<TunMessage>,
 
     udp_socket: Arc<UdpSocket>,
@@ -40,7 +41,7 @@ impl UdpActor {
     pub async fn new(
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
-        connected_peers: Arc<DashMap<SocketAddr, Sender<EncryptMessage>>>,
+        connected_peers: ConnectedPeers,
         tun_sender: Sender<TunMessage>,
         listen_addr: SocketAddr,
         local_private_key: Bytes,
@@ -187,11 +188,8 @@ impl UdpActor {
 
                 info!("decode packet done");
 
-                match self.connected_peers.get(&from) {
-                    Some(sender_ref) => {
-                        let mut sender = sender_ref.clone();
-                        drop(sender_ref);
-
+                match self.connected_peers.get_sender_by_udp_addr(from) {
+                    Some(mut sender) => {
                         if let Err(err) = sender.send(EncryptMessage::Frame { frame, from }).await {
                             error!(%err, "send frame to encrypt actor failed");
 
@@ -215,6 +213,7 @@ impl UdpActor {
                             from,
                             self.heartbeat_interval,
                             &self.remote_public_keys,
+                            &self.connected_peers,
                         ) {
                             Err(err) => {
                                 error!(%err, "create encrypt actor failed");
@@ -234,13 +233,13 @@ impl UdpActor {
 
                                 info!(%from, "send packet back done");
 
-                                self.connected_peers.insert(from, mailbox_sender);
+                                self.connected_peers.add_udp_addr(from, mailbox_sender);
                                 let connected_peers = self.connected_peers.clone();
 
                                 tokio::spawn(async move {
                                     let _ = encrypt_actor.run().await;
 
-                                    connected_peers.remove(&from);
+                                    connected_peers.remove_udp_addr(from);
                                 });
 
                                 Ok(())

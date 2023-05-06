@@ -13,6 +13,8 @@ use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, warn};
 
+use super::connected_peer::ConnectedPeers;
+use super::ip_packet;
 use super::message::EncryptMessage as Message;
 use super::message::{TunMessage, UdpMessage};
 use super::public_key::PublicKey;
@@ -31,6 +33,8 @@ enum State {
         heartbeat_receive_instant: Instant,
         heartbeat_task: JoinHandle<()>,
         remote_addr: SocketAddr,
+        saved_mahiro_addr: bool,
+        connected_peers: ConnectedPeers,
     },
 }
 
@@ -64,6 +68,7 @@ impl EncryptActor {
         from: SocketAddr,
         heartbeat_interval: Duration,
         remote_public_keys: &DashSet<PublicKey>,
+        connected_peers: &ConnectedPeers,
     ) -> anyhow::Result<(Self, Frame)> {
         match frame.r#type() {
             FrameType::Transport => {
@@ -119,6 +124,8 @@ impl EncryptActor {
                                     heartbeat_receive_instant: Instant::now(),
                                     heartbeat_task,
                                     remote_addr: from,
+                                    saved_mahiro_addr: false,
+                                    connected_peers: connected_peers.clone(),
                                 },
                                 heartbeat_interval,
                             },
@@ -167,6 +174,8 @@ impl EncryptActor {
                 buffer,
                 heartbeat_receive_instant,
                 remote_addr,
+                saved_mahiro_addr,
+                connected_peers,
                 ..
             } => {
                 match message {
@@ -193,15 +202,18 @@ impl EncryptActor {
                     }
 
                     Message::Frame { frame, from } => {
-                        Self::handle_handshake_frame(
+                        Self::handle_handshake_frame(HandleHandshakeFrameArgs {
                             frame,
                             from,
                             buffer,
                             encrypt,
                             heartbeat_receive_instant,
-                            &mut self.udp_sender,
-                            &mut self.tun_sender,
-                        )
+                            saved_mahiro_addr,
+                            mailbox_sender: &self.mailbox_sender,
+                            udp_sender: &mut self.udp_sender,
+                            tun_sender: &mut self.tun_sender,
+                            connected_peers,
+                        })
                         .await?;
 
                         info!("handle transport frame done");
@@ -259,13 +271,18 @@ impl EncryptActor {
     }
 
     async fn handle_handshake_frame(
-        frame: Frame,
-        from: SocketAddr,
-        buffer: &mut [u8],
-        encrypt: &Encrypt,
-        heartbeat_receive_instant: &mut Instant,
-        udp_sender: &mut Sender<UdpMessage>,
-        tun_sender: &mut Sender<TunMessage>,
+        HandleHandshakeFrameArgs {
+            frame,
+            from,
+            buffer,
+            encrypt,
+            heartbeat_receive_instant,
+            saved_mahiro_addr,
+            mailbox_sender,
+            udp_sender,
+            tun_sender,
+            connected_peers,
+        }: HandleHandshakeFrameArgs<'_>,
     ) -> anyhow::Result<()> {
         match frame.r#type() {
             FrameType::Handshake => {
@@ -273,6 +290,7 @@ impl EncryptActor {
 
                 Ok(())
             }
+
             FrameType::Transport => {
                 let nonce = frame.nonce;
                 let data = frame.data;
@@ -339,6 +357,22 @@ impl EncryptActor {
                     }
 
                     Some(DataOrHeartbeat::Data(data)) => {
+                        if !*saved_mahiro_addr {
+                            let mahiro_addr = match ip_packet::get_packet_mahiro_ip(data) {
+                                None => {
+                                    error!("packet has no ip, drop it");
+
+                                    return Ok(());
+                                }
+
+                                Some(mahiro_addr) => mahiro_addr,
+                            };
+
+                            connected_peers.add_mahiro_addr(mahiro_addr, mailbox_sender.clone());
+
+                            *saved_mahiro_addr = true;
+                        }
+
                         tun_sender
                             .send(TunMessage::ToTun(data.clone()))
                             .await
@@ -386,4 +420,17 @@ impl EncryptActor {
 
         Ok(())
     }
+}
+
+struct HandleHandshakeFrameArgs<'a> {
+    frame: Frame,
+    from: SocketAddr,
+    buffer: &'a mut [u8],
+    encrypt: &'a Encrypt,
+    heartbeat_receive_instant: &'a mut Instant,
+    saved_mahiro_addr: &'a mut bool,
+    mailbox_sender: &'a Sender<Message>,
+    udp_sender: &'a mut Sender<UdpMessage>,
+    tun_sender: &'a mut Sender<TunMessage>,
+    connected_peers: &'a ConnectedPeers,
 }
