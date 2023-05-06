@@ -21,3 +21,7 @@ pub enum TunMessage {
     FromTun(io::Result<Bytes>),
     ToTun(Bytes),
 }
+
+pub enum NatMessage {
+    UpdateNicAddrs,
+}

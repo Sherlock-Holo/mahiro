@@ -1,4 +1,5 @@
 #![feature(io_error_more)]
+#![feature(ip)]
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Sherlock-Holo/mahiro/master/mahiro.svg")]
 
 use std::io;
@@ -14,6 +15,7 @@ use self::args::{Args, Command};
 
 mod args;
 mod encrypt;
+mod ip_packet;
 mod mahiro;
 mod mihari;
 mod protocol;

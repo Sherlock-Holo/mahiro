@@ -12,7 +12,7 @@ pub fn get_packet_mahiro_ip(packet: &[u8]) -> Option<IpAddr> {
     } else if ip_ver == 0b0110 {
         // Safety: ip version is ipv6
         unsafe {
-            let ipv6_hdr = unsafe { &*(packet.as_ptr() as *const Ipv6Hdr) };
+            let ipv6_hdr = &*(packet.as_ptr() as *const Ipv6Hdr);
 
             Some(IpAddr::V6(Ipv6Addr::from(ipv6_hdr.src_addr.in6_u.u6_addr8)))
         }

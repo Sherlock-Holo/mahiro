@@ -14,11 +14,11 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, warn};
 
 use super::connected_peer::ConnectedPeers;
-use super::ip_packet;
 use super::message::EncryptMessage as Message;
 use super::message::{TunMessage, UdpMessage};
 use super::public_key::PublicKey;
 use crate::encrypt::{Encrypt, HandshakeState};
+use crate::ip_packet;
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::{util, HEARTBEAT_DATA};

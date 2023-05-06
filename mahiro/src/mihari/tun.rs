@@ -10,9 +10,9 @@ use tokio::task::JoinHandle;
 use tracing::{error, info, instrument};
 
 use super::connected_peer::ConnectedPeers;
-use super::ip_packet;
 use super::message::EncryptMessage;
 use super::message::TunMessage as Message;
+use crate::ip_packet;
 use crate::tun::Tun;
 
 #[derive(Debug)]
