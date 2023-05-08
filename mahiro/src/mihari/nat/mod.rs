@@ -11,7 +11,6 @@ use aya::programs::{tc, Link, SchedClassifier, TcAttachType};
 use aya::Bpf;
 use cidr::{Ipv4Inet, Ipv6Inet};
 use derivative::Derivative;
-use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{stream, StreamExt, TryStreamExt};
 use netlink_packet_route::address::Nla;
 use netlink_packet_route::link::nlas::Nla as LinkNla;
@@ -21,7 +20,6 @@ use tokio::time;
 use tracing::error;
 
 use self::ip_addr::{BpfIpv4Addr, BpfIpv6Addr};
-use super::message::NatMessage as Message;
 
 mod ip_addr;
 
@@ -36,9 +34,6 @@ const WATCH_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct NatActor {
-    mailbox_sender: Sender<Message>,
-    mailbox: Receiver<Message>,
-
     nic_addrs: HashMap<u32, NicAddr>,
     attached_bpf_programs: HashMap<String, Vec<OwnedSchedClassifierLink>>,
 
@@ -54,8 +49,6 @@ pub struct NatActor {
 
 impl NatActor {
     pub fn new(
-        mailbox_sender: Sender<Message>,
-        mailbox: Receiver<Message>,
         netlink_handle: Handle,
         mahiro_ipv4_network: Ipv4Inet,
         mahiro_ipv6_network: Ipv6Inet,
@@ -75,8 +68,6 @@ impl NatActor {
         let attached_bpf_programs = Self::attach_nic(&mut bpf, &watch_nic_list)?;
 
         Ok(Self {
-            mailbox_sender,
-            mailbox,
             nic_addrs: Default::default(),
             attached_bpf_programs,
             bpf,
@@ -245,7 +236,7 @@ impl NatActor {
         f(ipv6_mahiro_ip)
     }
 
-    async fn run(&mut self) -> anyhow::Result<()> {
+    pub async fn run(&mut self) -> anyhow::Result<()> {
         loop {
             self.run_circle().await?;
 
@@ -254,23 +245,7 @@ impl NatActor {
     }
 
     async fn run_circle(&mut self) -> anyhow::Result<()> {
-        let message = match self.mailbox.next().await {
-            None => {
-                error!("receive message from mailbox failed");
-
-                return Err(anyhow::anyhow!("receive message from mailbox failed"));
-            }
-
-            Some(message) => message,
-        };
-
-        match message {
-            Message::UpdateNicAddrs => {
-                self.update_nic_addrs().await?;
-            }
-        }
-
-        Ok(())
+        self.update_nic_addrs().await
     }
 
     async fn update_nic_addrs(&mut self) -> anyhow::Result<()> {

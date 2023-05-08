@@ -33,7 +33,7 @@ pub struct UdpActor {
     listen_addr: SocketAddr,
     local_private_key: Bytes,
     heartbeat_interval: Duration,
-    remote_public_keys: Arc<DashSet<PublicKey>>,
+    remote_public_keys: DashSet<PublicKey>,
 }
 
 impl UdpActor {
@@ -46,7 +46,7 @@ impl UdpActor {
         listen_addr: SocketAddr,
         local_private_key: Bytes,
         heartbeat_interval: Duration,
-        remote_public_keys: Arc<DashSet<PublicKey>>,
+        remote_public_keys: DashSet<PublicKey>,
     ) -> anyhow::Result<Self> {
         let (udp_socket, read_task) = Self::start(listen_addr, mailbox_sender.clone()).await?;
 

@@ -11,7 +11,7 @@ use tap::TapFallible;
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use super::connected_peer::ConnectedPeers;
 use super::message::EncryptMessage as Message;
@@ -177,67 +177,58 @@ impl EncryptActor {
                 saved_mahiro_addr,
                 connected_peers,
                 ..
-            } => {
-                match message {
-                    Message::HandshakeTimeout => {
-                        // drop or handshake timeout message when actor is transport
-                        debug!("ignore handshake message");
+            } => match message {
+                Message::Packet(packet) => {
+                    Self::handle_transport_packet(
+                        packet,
+                        *remote_addr,
+                        buffer,
+                        encrypt,
+                        &mut self.udp_sender,
+                    )
+                    .await?;
 
-                        Ok(())
-                    }
+                    info!("handle transport packet done");
 
-                    Message::Packet(packet) => {
-                        Self::handle_transport_packet(
-                            packet,
-                            *remote_addr,
-                            buffer,
-                            encrypt,
-                            &mut self.udp_sender,
-                        )
-                        .await?;
-
-                        info!("handle transport packet done");
-
-                        Ok(())
-                    }
-
-                    Message::Frame { frame, from } => {
-                        Self::handle_handshake_frame(HandleHandshakeFrameArgs {
-                            frame,
-                            from,
-                            buffer,
-                            encrypt,
-                            heartbeat_receive_instant,
-                            saved_mahiro_addr,
-                            mailbox_sender: &self.mailbox_sender,
-                            udp_sender: &mut self.udp_sender,
-                            tun_sender: &mut self.tun_sender,
-                            connected_peers,
-                        })
-                        .await?;
-
-                        info!("handle transport frame done");
-
-                        Ok(())
-                    }
-
-                    Message::Heartbeat => {
-                        Self::handle_transport_heartbeat(
-                            buffer,
-                            *remote_addr,
-                            encrypt,
-                            self.heartbeat_interval,
-                            heartbeat_receive_instant,
-                            &mut self.udp_sender,
-                        )
-                        .await?;
-
-                        info!("handle transport heartbeat done");
-
-                        Ok(())
-                    }
+                    Ok(())
                 }
-            }
+
+                Message::Frame { frame, from } => {
+                    Self::handle_handshake_frame(HandleHandshakeFrameArgs {
+                        frame,
+                        from,
+                        buffer,
+                        encrypt,
+                        heartbeat_receive_instant,
+                        saved_mahiro_addr,
+                        mailbox_sender: &self.mailbox_sender,
+                        udp_sender: &mut self.udp_sender,
+                        tun_sender: &mut self.tun_sender,
+                        connected_peers,
+                    })
+                    .await?;
+
+                    info!("handle transport frame done");
+
+                    Ok(())
+                }
+
+                Message::Heartbeat => {
+                    Self::handle_transport_heartbeat(
+                        buffer,
+                        *remote_addr,
+                        encrypt,
+                        self.heartbeat_interval,
+                        heartbeat_receive_instant,
+                        &mut self.udp_sender,
+                    )
+                    .await?;
+
+                    info!("handle transport heartbeat done");
+
+                    Ok(())
+                }
+            },
         }
     }
 

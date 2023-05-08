@@ -17,4 +17,14 @@ pub enum Command {
         #[arg(short, long)]
         config: String,
     },
+
+    Mihari {
+        /// config path
+        #[arg(short, long)]
+        config: String,
+
+        /// enable bpf mode nat
+        #[arg(short, long)]
+        bpf_nat: bool,
+    },
 }
