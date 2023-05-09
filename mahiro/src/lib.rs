@@ -5,13 +5,17 @@
 use std::io;
 use std::path::Path;
 
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use clap::Parser;
+use tokio::fs;
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{fmt, Registry};
 
 use self::args::{Args, Command};
+use self::encrypt::Encrypt;
 
 mod args;
 mod encrypt;
@@ -50,5 +54,15 @@ pub async fn run() -> anyhow::Result<()> {
     match args.command {
         Command::Mahiro { config } => mahiro::run(Path::new(&config)).await,
         Command::Mihari { config, bpf_nat } => mihari::run(Path::new(&config), bpf_nat).await,
+        Command::Genkey { private, public } => generate_keypair(&private, &public).await,
     }
+}
+
+async fn generate_keypair(private: &str, public: &str) -> anyhow::Result<()> {
+    let keypair = Encrypt::generate_keypair()?;
+
+    fs::write(private, BASE64_STANDARD.encode(keypair.private)).await?;
+    fs::write(public, BASE64_STANDARD.encode(keypair.public)).await?;
+
+    Ok(())
 }

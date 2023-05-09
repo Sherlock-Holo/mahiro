@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use once_cell::sync::Lazy;
 use snow::params::NoiseParams;
-use snow::Builder;
+use snow::{Builder, Keypair};
 use thiserror::Error;
 use tracing::{error, info, instrument};
 
@@ -46,6 +46,10 @@ pub struct Encrypt {
 }
 
 impl Encrypt {
+    pub fn generate_keypair() -> anyhow::Result<Keypair> {
+        Ok(Builder::new(NOISE_PARAMS.clone()).generate_keypair()?)
+    }
+
     pub fn new_initiator(local_private_key: &[u8]) -> Result<Self, Error> {
         const BUFFER_SIZE: usize = 65535;
 

@@ -27,4 +27,14 @@ pub enum Command {
         #[arg(short, long)]
         bpf_nat: bool,
     },
+
+    Genkey {
+        /// private key file path
+        #[arg(long)]
+        private: String,
+
+        /// public key file path
+        #[arg(long)]
+        public: String,
+    },
 }
