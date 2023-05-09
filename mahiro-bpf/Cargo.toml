@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aya-bpf = { git = "https://github.com/aya-rs/aya", branch = "main" }
-aya-log-ebpf = { git = "https://github.com/aya-rs/aya", branch = "main" }
+aya-bpf = { git = "https://github.com/aya-rs/aya", tag = "aya-log-v0.1.13" }
+aya-log-ebpf = { git = "https://github.com/aya-rs/aya", tag = "aya-log-v0.1.13" }
 network-types = "0.0"
 memoffset = "0.8"
 

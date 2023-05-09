@@ -155,7 +155,7 @@ dependencies = [
 [[package]]
 name = "aya-bpf"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?branch=main#9291457fbd32fe9fd5cef45b6db8c6e384861042"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
 dependencies = [
  "aya-bpf-bindings",
  "aya-bpf-cty",
@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "aya-bpf-bindings"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?branch=main#9291457fbd32fe9fd5cef45b6db8c6e384861042"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
 dependencies = [
  "aya-bpf-cty",
 ]
@@ -174,16 +174,16 @@ dependencies = [
 [[package]]
 name = "aya-bpf-cty"
 version = "0.2.1"
-source = "git+https://github.com/aya-rs/aya?branch=main#9291457fbd32fe9fd5cef45b6db8c6e384861042"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
 
 [[package]]
 name = "aya-bpf-macros"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?branch=main#9291457fbd32fe9fd5cef45b6db8c6e384861042"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.15",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -192,7 +192,7 @@ version = "0.1.13"
 source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
 dependencies = [
  "aya 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "aya-log-common 0.1.13 (git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13)",
+ "aya-log-common",
  "bytes",
  "log",
  "thiserror",
@@ -205,45 +205,37 @@ version = "0.1.13"
 source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
 dependencies = [
  "aya 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "num_enum 0.5.11",
-]
-
-[[package]]
-name = "aya-log-common"
-version = "0.1.13"
-source = "git+https://github.com/aya-rs/aya?branch=main#9291457fbd32fe9fd5cef45b6db8c6e384861042"
-dependencies = [
- "num_enum 0.6.1",
+ "num_enum",
 ]
 
 [[package]]
 name = "aya-log-ebpf"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?branch=main#9291457fbd32fe9fd5cef45b6db8c6e384861042"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
 dependencies = [
  "aya-bpf",
- "aya-log-common 0.1.13 (git+https://github.com/aya-rs/aya?branch=main)",
+ "aya-log-common",
  "aya-log-ebpf-macros",
 ]
 
 [[package]]
 name = "aya-log-ebpf-macros"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?branch=main#9291457fbd32fe9fd5cef45b6db8c6e384861042"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
 dependencies = [
- "aya-log-common 0.1.13 (git+https://github.com/aya-rs/aya?branch=main)",
+ "aya-log-common",
  "aya-log-parser",
  "proc-macro2",
  "quote",
- "syn 2.0.15",
+ "syn 1.0.109",
 ]
 
 [[package]]
 name = "aya-log-parser"
 version = "0.1.11-dev.0"
-source = "git+https://github.com/aya-rs/aya?branch=main#9291457fbd32fe9fd5cef45b6db8c6e384861042"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
 dependencies = [
- "aya-log-common 0.1.13 (git+https://github.com/aya-rs/aya?branch=main)",
+ "aya-log-common",
 ]
 
 [[package]]
@@ -964,9 +956,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.142"
+version = "0.2.144"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a987beff54b60ffa6d51982e1aa1146bc42f19bd26be28b0586f252fccf5317"
+checksum = "2b00cc1c228a6782d0f076e7b232802e0c5689d41bb5df366f2a6b6621cfdfe1"
 
 [[package]]
 name = "libloading"
@@ -1267,16 +1259,7 @@ version = "0.5.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f646caf906c20226733ed5b1374287eb97e3c2a5c227ce668c1f2ce20ae57c9"
 dependencies = [
- "num_enum_derive 0.5.11",
-]
-
-[[package]]
-name = "num_enum"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a015b430d3c108a207fd776d2e2196aaf8b1cf8cf93253e3a097ff3085076a1"
-dependencies = [
- "num_enum_derive 0.6.1",
+ "num_enum_derive",
 ]
 
 [[package]]
@@ -1288,17 +1271,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "num_enum_derive"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96667db765a921f7b295ffee8b60472b686a51d4f21c2ee4ffdb94c7013b65a6"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.15",
 ]
 
 [[package]]
@@ -1524,9 +1496,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.26"
+version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4424af4bf778aae2051a77b60283332f386554255d722233d09fbfc7e30da2fc"
+checksum = "8f4f29d145265ec1c483c7c654450edde0bfe043d3938d6972630663356d9500"
 dependencies = [
  "proc-macro2",
 ]
@@ -1694,18 +1666,18 @@ checksum = "bebd363326d05ec3e2f532ab7660680f3b02130d780c299bca73469d521bc0ed"
 
 [[package]]
 name = "serde"
-version = "1.0.160"
+version = "1.0.162"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb2f3770c8bce3bcda7e149193a069a0f4365bda1fa5cd88e03bca26afc1216c"
+checksum = "71b2f6e1ab5c2b98c05f0f35b236b22e8df7ead6ffbf51d7808da7f8817e7ab6"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.160"
+version = "1.0.162"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "291a097c63d8497e00160b166a967a4a79c64f3facdd01cbd7502231688d77df"
+checksum = "a2a0814352fd64b58489904a44ea8d90cb1a91dcb6b4f5ebabc32c8318e93cb6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1942,9 +1914,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.20"
+version = "0.3.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd0cbfecb4d19b5ea75bb31ad904eb5b9fa13f21079c3b92017ebdf4999a5890"
+checksum = "8f3403384eaacbca9923fa06940178ac13e4edb725486d70e8e15881d0c836cc"
 dependencies = [
  "itoa",
  "serde",
@@ -1954,15 +1926,15 @@ dependencies = [
 
 [[package]]
 name = "time-core"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e153e1f1acaef8acc537e68b44906d2db6436e2b35ac2c6b42640fff91f00fd"
+checksum = "7300fbefb4dadc1af235a9cef3737cea692a9d97e1b9cbcd4ebdae6f8868e6fb"
 
 [[package]]
 name = "time-macros"
-version = "0.2.8"
+version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd80a657e71da814b8e5d60d3374fc6d35045062245d80224748ae522dd76f36"
+checksum = "372950940a5f07bf38dbe211d7283c9e6d7327df53794992d293e534c733d09b"
 dependencies = [
  "time-core",
 ]
