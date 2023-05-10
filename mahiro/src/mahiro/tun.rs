@@ -11,7 +11,6 @@ use tracing::{error, info};
 
 use super::message::TunMessage as Message;
 use crate::mahiro::message::EncryptMessage;
-use crate::route_table::{RouteEntry, RouteTable};
 use crate::tun::Tun;
 
 #[derive(Debug)]
@@ -20,7 +19,6 @@ pub struct TunConfig {
     pub tun_ipv6: Ipv6Inet,
     pub tun_name: String,
     pub netlink_handle: Handle,
-    pub route_entries: Vec<RouteEntry>,
 }
 
 #[derive(Debug)]
@@ -32,7 +30,6 @@ pub struct TunActor {
     tun_config: TunConfig,
 
     tun: WriteHalf<Tun>,
-    route_table: RouteTable,
     read_task: JoinHandle<()>,
 }
 
@@ -43,8 +40,7 @@ impl TunActor {
         mailbox: Receiver<Message>,
         tun_config: TunConfig,
     ) -> anyhow::Result<Self> {
-        let (tun, route_table, read_task) =
-            Self::start(mailbox_sender.clone(), &tun_config).await?;
+        let (tun, read_task) = Self::start(mailbox_sender.clone(), &tun_config).await?;
 
         Ok(Self {
             mailbox_sender,
@@ -52,7 +48,6 @@ impl TunActor {
             encrypt_sender,
             tun_config,
             tun,
-            route_table,
             read_task,
         })
     }
@@ -60,7 +55,7 @@ impl TunActor {
     async fn start(
         mailbox_sender: Sender<Message>,
         tun_config: &TunConfig,
-    ) -> anyhow::Result<(WriteHalf<Tun>, RouteTable, JoinHandle<()>)> {
+    ) -> anyhow::Result<(WriteHalf<Tun>, JoinHandle<()>)> {
         let tun = Tun::new(
             tun_config.tun_name.clone(),
             tun_config.tun_ipv4,
@@ -72,22 +67,12 @@ impl TunActor {
 
         info!(?tun, "create tun done");
 
-        let mut route_table = RouteTable::new(tun_config.netlink_handle.clone());
-
-        route_table.clean_route_tables().await?;
-
-        info!("clean route tables done");
-
-        route_table.update_route(&tun_config.route_entries).await?;
-
-        info!(route_entries = ?tun_config.route_entries, "update route done");
-
         let (tun_read, tun_write) = io::split(tun);
 
         let read_task =
             tokio::spawn(async move { Self::read_from_tun(tun_read, mailbox_sender).await });
 
-        Ok((tun_write, route_table, read_task))
+        Ok((tun_write, read_task))
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
@@ -97,11 +82,9 @@ impl TunActor {
             .await
             .tap_err(|err| error!(%err, "shutdown tun failed"))?;
 
-        let (tun, route_table, read_task) =
-            Self::start(self.mailbox_sender.clone(), &self.tun_config).await?;
+        let (tun, read_task) = Self::start(self.mailbox_sender.clone(), &self.tun_config).await?;
 
         self.tun = tun;
-        self.route_table = route_table;
         self.read_task = read_task;
 
         Ok(())
@@ -229,7 +212,6 @@ mod tests {
             tun_ipv6: Ipv6Inet::new(Ipv6Addr::from_str("fc00:100::1").unwrap(), 64).unwrap(),
             tun_name: "test_tun".to_string(),
             netlink_handle: handle,
-            route_entries: vec![],
         };
 
         let (mailbox_sender, mailbox) = mpsc::channel(10);
@@ -240,8 +222,6 @@ mod tests {
                 .unwrap();
 
         tokio::spawn(async move { tun_actor.run().await });
-
-        // time::sleep(Duration::from_secs(3600)).await;
 
         let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
         udp_socket.connect("192.168.1.2:8888").await.unwrap();
