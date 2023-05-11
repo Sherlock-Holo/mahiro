@@ -102,17 +102,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c7d0618f0e0b7e8ff11427422b64564d5fb0be1940354bfe2e0529b18a9d9b8"
 
 [[package]]
-name = "async-trait"
-version = "0.1.68"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9ccdd8f2a161be9bd5c023df56f1b2a0bd1d83872ae53b71a84a12c9bf6e842"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.15",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -121,8 +110,7 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "aya"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "758d57288601ecc9d149e3413a5f23d6b72c0373febc97044d4f4aa149033b5e"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 dependencies = [
  "bitflags",
  "bytes",
@@ -130,23 +118,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "object 0.28.4",
- "parking_lot",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "aya"
-version = "0.11.0"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
-dependencies = [
- "bitflags",
- "bytes",
- "lazy_static",
- "libc",
- "log",
- "object 0.29.0",
+ "object",
  "parking_lot",
  "thiserror",
  "tokio",
@@ -155,7 +127,7 @@ dependencies = [
 [[package]]
 name = "aya-bpf"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 dependencies = [
  "aya-bpf-bindings",
  "aya-bpf-cty",
@@ -166,7 +138,7 @@ dependencies = [
 [[package]]
 name = "aya-bpf-bindings"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 dependencies = [
  "aya-bpf-cty",
 ]
@@ -174,12 +146,12 @@ dependencies = [
 [[package]]
 name = "aya-bpf-cty"
 version = "0.2.1"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 
 [[package]]
 name = "aya-bpf-macros"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -188,10 +160,10 @@ dependencies = [
 
 [[package]]
 name = "aya-log"
-version = "0.1.13"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
+version = "0.1.11"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 dependencies = [
- "aya 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "aya",
  "aya-log-common",
  "bytes",
  "log",
@@ -201,17 +173,17 @@ dependencies = [
 
 [[package]]
 name = "aya-log-common"
-version = "0.1.13"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
+version = "0.1.11"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 dependencies = [
- "aya 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "aya",
  "num_enum",
 ]
 
 [[package]]
 name = "aya-log-ebpf"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 dependencies = [
  "aya-bpf",
  "aya-log-common",
@@ -221,7 +193,7 @@ dependencies = [
 [[package]]
 name = "aya-log-ebpf-macros"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 dependencies = [
  "aya-log-common",
  "aya-log-parser",
@@ -233,7 +205,7 @@ dependencies = [
 [[package]]
 name = "aya-log-parser"
 version = "0.1.11-dev.0"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13#832bdd280c19095d79ba2d27281c17f0b09adc15"
+source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
 dependencies = [
  "aya-log-common",
 ]
@@ -1015,8 +987,7 @@ name = "mahiro"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "aya 0.11.0 (git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.13)",
+ "aya",
  "aya-log",
  "base64 0.21.0",
  "bytes",
@@ -1046,6 +1017,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
  "tun",
 ]
@@ -1271,15 +1243,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "object"
-version = "0.28.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e42c982f2d955fac81dd7e1d0e1426a7d702acd9c98d19ab01083a6a0328c424"
-dependencies = [
- "memchr",
 ]
 
 [[package]]

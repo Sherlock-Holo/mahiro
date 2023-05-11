@@ -4,11 +4,12 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::time::Duration;
 
-use aya::maps::lpm_trie::Key;
-use aya::maps::{HashMap as BpfHashMap, LpmTrie, MapData, MapError};
+use aya::maps::lpm_trie::{Key, LpmTrie};
+use aya::maps::{HashMap as BpfHashMap, MapError, MapRefMut};
 use aya::programs::tc::SchedClassifierLink;
 use aya::programs::{tc, Link, SchedClassifier, TcAttachType};
 use aya::Bpf;
+use aya_log::BpfLogger;
 use cidr::{Ipv4Inet, Ipv6Inet};
 use derivative::Derivative;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -18,6 +19,7 @@ use rtnetlink::{AddressHandle, Handle, LinkHandle};
 use tap::TapFallible;
 use tokio::time;
 use tracing::error;
+use tracing_log::LogTracer;
 
 use self::ip_addr::{BpfIpv4Addr, BpfIpv6Addr};
 
@@ -58,6 +60,8 @@ impl NatActor {
         let mut bpf = Bpf::load_file(bpf_prog).tap_err(|err| {
             error!(%err, ?bpf_prog, "load bpf failed");
         })?;
+
+        init_bpf_log(&mut bpf);
 
         Self::set_bpf_map(&mut bpf, mahiro_ipv4_network, mahiro_ipv6_network)?;
 
@@ -149,7 +153,7 @@ impl NatActor {
         mahiro_ipv4_network: Ipv4Inet,
         mahiro_ipv6_network: Ipv6Inet,
     ) -> anyhow::Result<()> {
-        Self::fn_with_ipv4_mahiro_ip(bpf, |mut lpm_trie| {
+        Self::fn_with_ipv4_mahiro_ip(bpf, |lpm_trie| {
             let addr = mahiro_ipv4_network.address().into();
             let prefix = mahiro_ipv4_network.network_length();
 
@@ -162,7 +166,7 @@ impl NatActor {
             Ok(())
         })?;
 
-        Self::fn_with_ipv6_mahiro_ip(bpf, |mut lpm_trie| {
+        Self::fn_with_ipv6_mahiro_ip(bpf, |lpm_trie| {
             let addr = mahiro_ipv6_network.address().into();
             let prefix = mahiro_ipv6_network.network_length();
 
@@ -177,7 +181,7 @@ impl NatActor {
     }
 
     fn fn_with_nic_ipv4_map<
-        F: FnOnce(BpfHashMap<&mut MapData, u32, BpfIpv4Addr>) -> anyhow::Result<()>,
+        F: FnOnce(BpfHashMap<MapRefMut, u32, BpfIpv4Addr>) -> anyhow::Result<()>,
     >(
         bpf: &mut Bpf,
         f: F,
@@ -192,7 +196,7 @@ impl NatActor {
     }
 
     fn fn_with_nic_ipv6_map<
-        F: FnOnce(BpfHashMap<&mut MapData, u32, BpfIpv6Addr>) -> anyhow::Result<()>,
+        F: FnOnce(BpfHashMap<MapRefMut, u32, BpfIpv6Addr>) -> anyhow::Result<()>,
     >(
         bpf: &mut Bpf,
         f: F,
@@ -207,7 +211,7 @@ impl NatActor {
     }
 
     fn fn_with_ipv4_mahiro_ip<
-        F: FnOnce(LpmTrie<&mut MapData, BpfIpv4Addr, u8>) -> anyhow::Result<()>,
+        F: FnOnce(LpmTrie<MapRefMut, BpfIpv4Addr, u8>) -> anyhow::Result<()>,
     >(
         bpf: &mut Bpf,
         f: F,
@@ -222,7 +226,7 @@ impl NatActor {
     }
 
     fn fn_with_ipv6_mahiro_ip<
-        F: FnOnce(LpmTrie<&mut MapData, BpfIpv6Addr, u8>) -> anyhow::Result<()>,
+        F: FnOnce(LpmTrie<MapRefMut, BpfIpv6Addr, u8>) -> anyhow::Result<()>,
     >(
         bpf: &mut Bpf,
         f: F,
@@ -442,4 +446,10 @@ impl Drop for OwnedSchedClassifierLink {
 struct NicAddr {
     ipv4: Option<Ipv4Addr>,
     ipv6: Option<Ipv6Addr>,
+}
+
+fn init_bpf_log(bpf: &mut Bpf) {
+    LogTracer::builder().init().unwrap();
+
+    BpfLogger::init(bpf).unwrap();
 }
