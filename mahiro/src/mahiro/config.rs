@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use base64::prelude::BASE64_STANDARD;
@@ -24,7 +23,7 @@ pub struct Config {
     #[serde_as(as = "DisplayFromStr")]
     pub local_ipv6: Ipv6Inet,
 
-    pub peer_addr: SocketAddr,
+    pub peer_addr: String,
 
     #[serde(deserialize_with = "parse_duration")]
     pub heartbeat_interval: Duration,

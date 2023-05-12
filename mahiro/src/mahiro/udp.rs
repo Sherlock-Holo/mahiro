@@ -6,7 +6,7 @@ use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
 use tap::TapFallible;
-use tokio::net::UdpSocket;
+use tokio::net::{self, ToSocketAddrs, UdpSocket};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument};
 
@@ -20,7 +20,7 @@ pub struct UdpActor {
     mailbox: Receiver<Message>,
     encrypt_sender: Sender<EncryptMessage>,
 
-    remote_addr: SocketAddr,
+    remote_addr: Vec<SocketAddr>,
 
     udp_socket: Arc<UdpSocket>,
     read_task: JoinHandle<()>,
@@ -31,9 +31,14 @@ impl UdpActor {
         encrypt_sender: Sender<EncryptMessage>,
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
-        remote_addr: SocketAddr,
+        remote_addr: impl ToSocketAddrs,
     ) -> anyhow::Result<Self> {
-        let (udp_socket, read_task) = Self::start(remote_addr, mailbox_sender.clone()).await?;
+        let remote_addr = net::lookup_host(remote_addr)
+            .await
+            .tap_err(|err| error!(%err, "lookup host failed"))?
+            .collect::<Vec<_>>();
+
+        let (udp_socket, read_task) = Self::start(&remote_addr, mailbox_sender.clone()).await?;
         let udp_actor = Self {
             mailbox_sender,
             mailbox,
@@ -47,7 +52,7 @@ impl UdpActor {
     }
 
     async fn start(
-        remote_addr: SocketAddr,
+        remote_addr: &[SocketAddr],
         sender: Sender<Message>,
     ) -> anyhow::Result<(Arc<UdpSocket>, JoinHandle<()>)> {
         let udp_socket = UdpSocket::bind("0.0.0.0:0")
@@ -56,7 +61,7 @@ impl UdpActor {
         udp_socket
             .connect(remote_addr)
             .await
-            .tap_err(|err| error!(%err, %remote_addr, "udp connect failed"))?;
+            .tap_err(|err| error!(%err, ?remote_addr, "udp connect failed"))?;
         let udp_socket = Arc::new(udp_socket);
         let read_task = {
             let udp_socket = udp_socket.clone();
@@ -70,7 +75,7 @@ impl UdpActor {
         self.read_task.abort();
 
         let (udp_socket, read_task) =
-            Self::start(self.remote_addr, self.mailbox_sender.clone()).await?;
+            Self::start(&self.remote_addr, self.mailbox_sender.clone()).await?;
         self.udp_socket = udp_socket;
         self.read_task = read_task;
 
