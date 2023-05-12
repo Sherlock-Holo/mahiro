@@ -11,7 +11,7 @@ use tap::TapFallible;
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{error, info, warn};
+use tracing::{debug, error, warn};
 
 use super::connected_peer::ConnectedPeers;
 use super::message::EncryptMessage as Message;
@@ -188,7 +188,7 @@ impl EncryptActor {
                     )
                     .await?;
 
-                    info!("handle transport packet done");
+                    debug!("handle transport packet done");
 
                     Ok(())
                 }
@@ -208,7 +208,7 @@ impl EncryptActor {
                     })
                     .await?;
 
-                    info!("handle transport frame done");
+                    debug!("handle transport frame done");
 
                     Ok(())
                 }
@@ -224,7 +224,7 @@ impl EncryptActor {
                     )
                     .await?;
 
-                    info!("handle transport heartbeat done");
+                    debug!("handle transport heartbeat done");
 
                     Ok(())
                 }

@@ -7,7 +7,7 @@ use tap::TapFallible;
 use tokio::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use super::message::TunMessage as Message;
 use crate::mahiro::message::EncryptMessage;
@@ -161,7 +161,7 @@ impl TunActor {
                     .await
                     .tap_err(|err| error!(%err, "send packet to encrypt failed"))?;
 
-                info!("send packet to encrypt done");
+                debug!("send packet to encrypt done");
 
                 Ok(())
             }
@@ -172,7 +172,7 @@ impl TunActor {
                     .await
                     .tap_err(|err| error!(%err, "write packet to tun failed"))?;
 
-                info!("write packet to tun done");
+                debug!("write packet to tun done");
 
                 Ok(())
             }

@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use bytes::{Buf, BytesMut};
 use cidr::{Ipv4Inet, Ipv6Inet};
 use futures_channel::mpsc::{Receiver, Sender};
@@ -7,7 +9,7 @@ use tap::TapFallible;
 use tokio::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::task::JoinHandle;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 use super::connected_peer::ConnectedPeers;
 use super::message::EncryptMessage;
@@ -181,11 +183,19 @@ impl TunActor {
                 }
 
                 Some(ip) => {
-                    info!(%ip, "get mahiro ip done");
+                    debug!(%ip, "get tun packet ip done");
+
+                    if let IpAddr::V6(ip) = ip {
+                        if ip.is_unicast_link_local() {
+                            debug!(%ip, "ip is ipv6 link local, drop it");
+
+                            return Ok(());
+                        }
+                    }
 
                     let mut sender = match self.connected_peers.get_sender_by_mahiro_addr(ip) {
                         None => {
-                            info!(%ip, "ip doesn't in connected peers, maybe peer is disconnected, drop it");
+                            debug!(%ip, "ip doesn't in connected peers, maybe peer is disconnected, drop it");
 
                             return Ok(());
                         }

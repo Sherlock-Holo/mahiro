@@ -11,7 +11,7 @@ use prost::Message as _;
 use tap::TapFallible;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 use super::connected_peer::ConnectedPeers;
 use super::encrypt::EncryptActor;
@@ -164,7 +164,7 @@ impl UdpActor {
                     .await
                     .tap_err(|err| error!(%err, %to, "send packet failed"))?;
 
-                info!(%to, "send packet done");
+                debug!(%to, "send packet done");
 
                 Ok(())
             }
@@ -186,7 +186,7 @@ impl UdpActor {
                     Ok(frame) => frame,
                 };
 
-                info!("decode packet done");
+                debug!("decode packet done");
 
                 match self.connected_peers.get_sender_by_udp_addr(from) {
                     Some(mut sender) => {
@@ -196,7 +196,7 @@ impl UdpActor {
                             return Err(err.into());
                         }
 
-                        info!(%from, "send frame to encrypt actor done");
+                        debug!(%from, "send frame to encrypt actor done");
 
                         Ok(())
                     }
@@ -231,7 +231,7 @@ impl UdpActor {
                                         |err| error!(%err, %from, "send packet back failed"),
                                     )?;
 
-                                info!(%from, "send packet back done");
+                                debug!(%from, "send packet back done");
 
                                 self.connected_peers.add_udp_addr(from, mailbox_sender);
                                 let connected_peers = self.connected_peers.clone();

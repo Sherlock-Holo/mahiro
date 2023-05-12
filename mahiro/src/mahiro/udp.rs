@@ -8,7 +8,7 @@ use prost::Message as _;
 use tap::TapFallible;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 use super::message::EncryptMessage;
 use super::message::UdpMessage as Message;
@@ -158,7 +158,7 @@ impl UdpActor {
                     }
 
                     Ok(frame) => {
-                        info!("decode frame done");
+                        debug!("decode frame done");
 
                         frame
                     }
