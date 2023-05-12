@@ -32,9 +32,9 @@ pub struct Config {
     #[serde(deserialize_with = "parse_duration")]
     pub heartbeat_interval: Duration,
 
-    pub nic_list: Vec<String>,
+    pub nic_list: Option<Vec<String>>,
 
-    pub bpf_prog: String,
+    pub bpf_prog: Option<String>,
 }
 
 #[serde_as]

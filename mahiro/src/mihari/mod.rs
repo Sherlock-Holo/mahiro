@@ -59,12 +59,16 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
     let udp_actor_task = tokio::spawn(async move { udp_actor.run().await });
 
     if bpf_nat {
+        let bpf_prog = config
+            .bpf_prog
+            .ok_or_else(|| anyhow::anyhow!("bpf prog not set"))?;
+
         let mut nat_actor = NatActor::new(
             handle,
             config.local_ipv4,
             config.local_ipv6,
-            HashSet::from_iter(config.nic_list),
-            Path::new(&config.bpf_prog),
+            HashSet::from_iter(config.nic_list.unwrap_or_default()),
+            Path::new(&bpf_prog),
         )?;
 
         let nat_actor_task = tokio::spawn(async move { nat_actor.run().await });
