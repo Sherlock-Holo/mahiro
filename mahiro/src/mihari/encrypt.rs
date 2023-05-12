@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -34,7 +34,9 @@ enum State {
         heartbeat_receive_instant: Instant,
         heartbeat_task: JoinHandle<()>,
         remote_addr: SocketAddr,
-        saved_mahiro_addr: bool,
+        saved_mahiro_ipv4: bool,
+        saved_mahiro_ipv6: bool,
+        saved_mahiro_link_local_ipv6: bool,
         connected_peers: ConnectedPeers,
     },
 }
@@ -125,7 +127,9 @@ impl EncryptActor {
                                     heartbeat_receive_instant: Instant::now(),
                                     heartbeat_task,
                                     remote_addr: from,
-                                    saved_mahiro_addr: false,
+                                    saved_mahiro_ipv4: false,
+                                    saved_mahiro_ipv6: false,
+                                    saved_mahiro_link_local_ipv6: false,
                                     connected_peers: connected_peers.clone(),
                                 },
                                 heartbeat_interval,
@@ -175,7 +179,9 @@ impl EncryptActor {
                 buffer,
                 heartbeat_receive_instant,
                 remote_addr,
-                saved_mahiro_addr,
+                saved_mahiro_ipv4,
+                saved_mahiro_ipv6,
+                saved_mahiro_link_local_ipv6,
                 connected_peers,
                 ..
             } => match message {
@@ -201,7 +207,9 @@ impl EncryptActor {
                         buffer,
                         encrypt,
                         heartbeat_receive_instant,
-                        saved_mahiro_ip: saved_mahiro_addr,
+                        saved_mahiro_ipv4,
+                        saved_mahiro_ipv6,
+                        saved_mahiro_link_local_ipv6,
                         mailbox_sender: &self.mailbox_sender,
                         udp_sender: &mut self.udp_sender,
                         tun_sender: &mut self.tun_sender,
@@ -269,7 +277,9 @@ impl EncryptActor {
             buffer,
             encrypt,
             heartbeat_receive_instant,
-            saved_mahiro_ip,
+            saved_mahiro_ipv4,
+            saved_mahiro_ipv6,
+            saved_mahiro_link_local_ipv6,
             mailbox_sender,
             udp_sender,
             tun_sender,
@@ -349,7 +359,10 @@ impl EncryptActor {
                     }
 
                     Some(DataOrHeartbeat::Data(data)) => {
-                        if !*saved_mahiro_ip {
+                        if !*saved_mahiro_ipv4
+                            || !*saved_mahiro_ipv6
+                            || !*saved_mahiro_link_local_ipv6
+                        {
                             let mahiro_ip = match ip_packet::get_packet_ip(data, IpLocation::Src) {
                                 None => {
                                     error!("packet has no ip, drop it");
@@ -362,9 +375,32 @@ impl EncryptActor {
 
                             debug!(%mahiro_ip, "get mahiro ip done");
 
-                            connected_peers.add_mahiro_ip(mahiro_ip, mailbox_sender.clone());
+                            match mahiro_ip {
+                                IpAddr::V4(_) => {
+                                    if !*saved_mahiro_ipv4 {
+                                        connected_peers
+                                            .add_mahiro_ip(mahiro_ip, mailbox_sender.clone());
 
-                            *saved_mahiro_ip = true;
+                                        *saved_mahiro_ipv4 = true;
+                                    }
+                                }
+                                IpAddr::V6(ip) => {
+                                    if ip.is_unicast_link_local() && !*saved_mahiro_link_local_ipv6
+                                    {
+                                        connected_peers
+                                            .add_mahiro_ip(mahiro_ip, mailbox_sender.clone());
+
+                                        *saved_mahiro_link_local_ipv6 = true;
+                                    }
+
+                                    if !ip.is_unicast_link_local() && !*saved_mahiro_ipv6 {
+                                        connected_peers
+                                            .add_mahiro_ip(mahiro_ip, mailbox_sender.clone());
+
+                                        *saved_mahiro_ipv6 = true;
+                                    }
+                                }
+                            }
                         }
 
                         tun_sender
@@ -422,7 +458,9 @@ struct HandleHandshakeFrameArgs<'a> {
     buffer: &'a mut [u8],
     encrypt: &'a Encrypt,
     heartbeat_receive_instant: &'a mut Instant,
-    saved_mahiro_ip: &'a mut bool,
+    saved_mahiro_ipv4: &'a mut bool,
+    saved_mahiro_ipv6: &'a mut bool,
+    saved_mahiro_link_local_ipv6: &'a mut bool,
     mailbox_sender: &'a Sender<Message>,
     udp_sender: &'a mut Sender<UdpMessage>,
     tun_sender: &'a mut Sender<TunMessage>,
