@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use derivative::Derivative;
 use once_cell::sync::Lazy;
 use snow::params::NoiseParams;
 use snow::{Builder, Keypair};
@@ -34,9 +35,13 @@ pub enum HandshakeState<'a> {
     PeerPublicKey(&'a [u8]),
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 enum State {
-    Handshake(Box<snow::HandshakeState>, Vec<u8>),
+    Handshake(
+        Box<snow::HandshakeState>,
+        #[derivative(Debug = "ignore")] Vec<u8>,
+    ),
     Transport(snow::StatelessTransportState),
 }
 
