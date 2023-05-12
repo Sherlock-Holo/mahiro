@@ -10,6 +10,8 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
 use super::message::TunMessage as Message;
+use crate::ip_packet;
+use crate::ip_packet::IpLocation;
 use crate::mahiro::message::EncryptMessage;
 use crate::tun::Tun;
 
@@ -156,12 +158,32 @@ impl TunActor {
             }
 
             Message::FromTun(Ok(packet)) => {
+                let dst_ip = match ip_packet::get_packet_ip(&packet, IpLocation::Dst) {
+                    None => {
+                        debug!("drop no dst ip packet");
+
+                        return Ok(());
+                    }
+
+                    Some(ip) => ip,
+                };
+
+                let src_ip = match ip_packet::get_packet_ip(&packet, IpLocation::Src) {
+                    None => {
+                        debug!("drop no src ip packet");
+
+                        return Ok(());
+                    }
+
+                    Some(ip) => ip,
+                };
+
                 self.encrypt_sender
                     .send(EncryptMessage::Packet(packet))
                     .await
                     .tap_err(|err| error!(%err, "send packet to encrypt failed"))?;
 
-                debug!("send packet to encrypt done");
+                debug!(%src_ip, %dst_ip, "send packet to encrypt done");
 
                 Ok(())
             }

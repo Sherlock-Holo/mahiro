@@ -169,12 +169,32 @@ impl TunActor {
             }
 
             Message::ToTun(packet) => {
+                let dst_ip = match ip_packet::get_packet_ip(&packet, IpLocation::Dst) {
+                    None => {
+                        debug!("drop no dst ip packet");
+
+                        return Ok(());
+                    }
+
+                    Some(ip) => ip,
+                };
+
+                let src_ip = match ip_packet::get_packet_ip(&packet, IpLocation::Src) {
+                    None => {
+                        debug!("drop no src ip packet");
+
+                        return Ok(());
+                    }
+
+                    Some(ip) => ip,
+                };
+
                 self.tun
                     .write(&packet)
                     .await
                     .tap_err(|err| error!(%err, "write packet to tun failed"))?;
 
-                debug!("write packet to tun done");
+                debug!(%src_ip, %dst_ip, "write packet to tun done");
 
                 Ok(())
             }
