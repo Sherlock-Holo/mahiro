@@ -9,7 +9,7 @@ use super::message::EncryptMessage;
 #[derive(Debug, Default)]
 struct ConnectedPeersInner {
     udp_addrs: DashMap<SocketAddr, Sender<EncryptMessage>>,
-    mahiro_addrs: DashMap<IpAddr, Sender<EncryptMessage>>,
+    mahiro_ips: DashMap<IpAddr, Sender<EncryptMessage>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -20,14 +20,14 @@ impl ConnectedPeers {
         self.0.udp_addrs.insert(addr, sender);
     }
 
-    pub fn add_mahiro_addr(&self, addr: IpAddr, sender: Sender<EncryptMessage>) {
-        self.0.mahiro_addrs.insert(addr, sender);
+    pub fn add_mahiro_ip(&self, addr: IpAddr, sender: Sender<EncryptMessage>) {
+        self.0.mahiro_ips.insert(addr, sender);
     }
 
     pub fn remove_udp_addr(&self, addr: SocketAddr) {
         if let Some((_, sender)) = self.0.udp_addrs.remove(&addr) {
             self.0
-                .mahiro_addrs
+                .mahiro_ips
                 .retain(|_, other_sender| !sender.same_receiver(other_sender))
         }
     }
@@ -36,7 +36,7 @@ impl ConnectedPeers {
         self.0.udp_addrs.get(&addr).map(|sender| sender.clone())
     }
 
-    pub fn get_sender_by_mahiro_addr(&self, addr: IpAddr) -> Option<Sender<EncryptMessage>> {
-        self.0.mahiro_addrs.get(&addr).map(|sender| sender.clone())
+    pub fn get_sender_by_mahiro_ip(&self, addr: IpAddr) -> Option<Sender<EncryptMessage>> {
+        self.0.mahiro_ips.get(&addr).map(|sender| sender.clone())
     }
 }

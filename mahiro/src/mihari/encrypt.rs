@@ -19,6 +19,7 @@ use super::message::{TunMessage, UdpMessage};
 use super::public_key::PublicKey;
 use crate::encrypt::{Encrypt, HandshakeState};
 use crate::ip_packet;
+use crate::ip_packet::IpLocation;
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::{util, HEARTBEAT_DATA};
@@ -200,7 +201,7 @@ impl EncryptActor {
                         buffer,
                         encrypt,
                         heartbeat_receive_instant,
-                        saved_mahiro_addr,
+                        saved_mahiro_ip: saved_mahiro_addr,
                         mailbox_sender: &self.mailbox_sender,
                         udp_sender: &mut self.udp_sender,
                         tun_sender: &mut self.tun_sender,
@@ -268,7 +269,7 @@ impl EncryptActor {
             buffer,
             encrypt,
             heartbeat_receive_instant,
-            saved_mahiro_addr,
+            saved_mahiro_ip,
             mailbox_sender,
             udp_sender,
             tun_sender,
@@ -348,8 +349,8 @@ impl EncryptActor {
                     }
 
                     Some(DataOrHeartbeat::Data(data)) => {
-                        if !*saved_mahiro_addr {
-                            let mahiro_addr = match ip_packet::get_packet_mahiro_ip(data) {
+                        if !*saved_mahiro_ip {
+                            let mahiro_ip = match ip_packet::get_packet_ip(data, IpLocation::Src) {
                                 None => {
                                     error!("packet has no ip, drop it");
 
@@ -359,9 +360,11 @@ impl EncryptActor {
                                 Some(mahiro_addr) => mahiro_addr,
                             };
 
-                            connected_peers.add_mahiro_addr(mahiro_addr, mailbox_sender.clone());
+                            debug!(%mahiro_ip, "get mahiro ip done");
 
-                            *saved_mahiro_addr = true;
+                            connected_peers.add_mahiro_ip(mahiro_ip, mailbox_sender.clone());
+
+                            *saved_mahiro_ip = true;
                         }
 
                         tun_sender
@@ -419,7 +422,7 @@ struct HandleHandshakeFrameArgs<'a> {
     buffer: &'a mut [u8],
     encrypt: &'a Encrypt,
     heartbeat_receive_instant: &'a mut Instant,
-    saved_mahiro_addr: &'a mut bool,
+    saved_mahiro_ip: &'a mut bool,
     mailbox_sender: &'a Sender<Message>,
     udp_sender: &'a mut Sender<UdpMessage>,
     tun_sender: &'a mut Sender<TunMessage>,

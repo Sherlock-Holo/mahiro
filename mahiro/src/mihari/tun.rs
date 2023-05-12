@@ -15,6 +15,7 @@ use super::connected_peer::ConnectedPeers;
 use super::message::EncryptMessage;
 use super::message::TunMessage as Message;
 use crate::ip_packet;
+use crate::ip_packet::IpLocation;
 use crate::tun::Tun;
 
 #[derive(Debug)]
@@ -172,44 +173,48 @@ impl TunActor {
                     .await
                     .tap_err(|err| error!(%err, "write packet to tun failed"))?;
 
+                debug!("write packet to tun done");
+
                 Ok(())
             }
 
-            Message::FromTun(Ok(packet)) => match ip_packet::get_packet_mahiro_ip(&packet) {
-                None => {
-                    error!("packet from tun doesn't have ip addr, drop it");
+            Message::FromTun(Ok(packet)) => {
+                match ip_packet::get_packet_ip(&packet, IpLocation::Dst) {
+                    None => {
+                        error!("packet from tun doesn't have ip addr, drop it");
 
-                    Ok(())
-                }
-
-                Some(ip) => {
-                    debug!(%ip, "get tun packet ip done");
-
-                    if let IpAddr::V6(ip) = ip {
-                        if ip.is_unicast_link_local() {
-                            debug!(%ip, "ip is ipv6 link local, drop it");
-
-                            return Ok(());
-                        }
+                        Ok(())
                     }
 
-                    let mut sender = match self.connected_peers.get_sender_by_mahiro_addr(ip) {
-                        None => {
-                            debug!(%ip, "ip doesn't in connected peers, maybe peer is disconnected, drop it");
+                    Some(ip) => {
+                        debug!(%ip, "get tun packet dst ip done");
 
-                            return Ok(());
+                        if let IpAddr::V6(ip) = ip {
+                            if ip.is_unicast_link_local() {
+                                debug!(%ip, "ip is ipv6 link local, drop it");
+
+                                return Ok(());
+                            }
                         }
 
-                        Some(sender) => sender,
-                    };
+                        let mut sender = match self.connected_peers.get_sender_by_mahiro_ip(ip) {
+                            None => {
+                                debug!(%ip, "ip doesn't in connected peers, maybe peer is disconnected, drop it");
 
-                    if let Err(err) = sender.send(EncryptMessage::Packet(packet)).await {
-                        error!(%err, %ip, "send tun packet to encrypt actor failed");
+                                return Ok(());
+                            }
+
+                            Some(sender) => sender,
+                        };
+
+                        if let Err(err) = sender.send(EncryptMessage::Packet(packet)).await {
+                            error!(%err, %ip, "send tun packet to encrypt actor failed");
+                        }
+
+                        Ok(())
                     }
-
-                    Ok(())
                 }
-            },
+            }
         }
     }
 }
