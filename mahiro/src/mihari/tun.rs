@@ -149,6 +149,7 @@ impl TunActor {
         }
     }
 
+    #[instrument(err)]
     async fn run_circle(&mut self) -> anyhow::Result<()> {
         let message = match self.mailbox.next().await {
             None => {

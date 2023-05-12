@@ -10,7 +10,7 @@ use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 use serde_with::{serde_as, DisplayFromStr};
 
-use super::public_key::PublicKey;
+use crate::public_key::PublicKey;
 
 #[serde_as]
 #[derive(Debug, Deserialize)]

@@ -23,6 +23,7 @@ mod ip_packet;
 mod mahiro;
 mod mihari;
 mod protocol;
+mod public_key;
 mod route_table;
 mod tun;
 mod util;

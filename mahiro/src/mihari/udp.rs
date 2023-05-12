@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use bytes::{Buf, Bytes, BytesMut};
 use dashmap::DashSet;
+use derivative::Derivative;
 use futures_channel::mpsc;
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
@@ -17,10 +18,11 @@ use super::connected_peer::ConnectedPeers;
 use super::encrypt::EncryptActor;
 use super::message::UdpMessage as Message;
 use super::message::{EncryptMessage, TunMessage};
-use super::public_key::PublicKey;
 use crate::protocol::Frame;
+use crate::public_key::PublicKey;
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct UdpActor {
     mailbox_sender: Sender<Message>,
     mailbox: Receiver<Message>,
@@ -31,6 +33,7 @@ pub struct UdpActor {
     read_task: JoinHandle<()>,
 
     listen_addr: SocketAddr,
+    #[derivative(Debug = "ignore")]
     local_private_key: Bytes,
     heartbeat_interval: Duration,
     remote_public_keys: DashSet<PublicKey>,

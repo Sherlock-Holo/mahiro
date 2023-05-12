@@ -46,7 +46,7 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
         encrypt_mailbox,
         config.heartbeat_interval,
         config.local_private_key,
-        config.peer_public_key,
+        config.peer_public_key.into(),
     )
     .await?;
     let mut tun_actor = TunActor::new(encrypt_sender, tun_sender, tun_mailbox, tun_config).await?;

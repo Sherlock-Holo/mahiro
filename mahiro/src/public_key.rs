@@ -58,6 +58,12 @@ impl From<Bytes> for PublicKey {
     }
 }
 
+impl From<Vec<u8>> for PublicKey {
+    fn from(value: Vec<u8>) -> Self {
+        Self(value.into())
+    }
+}
+
 impl From<PublicKey> for Bytes {
     fn from(value: PublicKey) -> Self {
         value.0

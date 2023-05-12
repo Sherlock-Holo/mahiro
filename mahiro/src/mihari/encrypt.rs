@@ -11,17 +11,17 @@ use tap::TapFallible;
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 
 use super::connected_peer::ConnectedPeers;
 use super::message::EncryptMessage as Message;
 use super::message::{TunMessage, UdpMessage};
-use super::public_key::PublicKey;
 use crate::encrypt::{Encrypt, HandshakeState};
 use crate::ip_packet;
 use crate::ip_packet::IpLocation;
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
+use crate::public_key::PublicKey;
 use crate::{util, HEARTBEAT_DATA};
 
 #[derive(Derivative)]
@@ -162,6 +162,7 @@ impl EncryptActor {
         }
     }
 
+    #[instrument(err)]
     async fn run_circle(&mut self) -> anyhow::Result<()> {
         let message = match self.mailbox.next().await {
             None => {
