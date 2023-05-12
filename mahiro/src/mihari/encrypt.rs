@@ -425,3 +425,111 @@ struct HandleHandshakeFrameArgs<'a> {
     tun_sender: &'a mut Sender<TunMessage>,
     connected_peers: &'a ConnectedPeers,
 }
+
+#[cfg(test)]
+mod tests {
+    use futures_channel::mpsc;
+    use test_log::test;
+
+    use super::*;
+
+    #[test(tokio::test)]
+    async fn test() {
+        let initiator_keypair = Encrypt::generate_keypair().unwrap();
+        let responder_keypair = Encrypt::generate_keypair().unwrap();
+        let mut initiator_encrypt = Encrypt::new_initiator(&initiator_keypair.private).unwrap();
+        let (tun_sender, mut tun_mailbox) = mpsc::channel(10);
+        let (udp_sender, mut udp_mailbox) = mpsc::channel(10);
+        let (mut mailbox_sender, mailbox) = mpsc::channel(10);
+
+        let set = DashSet::new();
+        set.insert(PublicKey::from(Bytes::from(initiator_keypair.public)));
+
+        let initiator_handshake = initiator_encrypt.initiator_handshake().unwrap();
+        let frame = Frame {
+            r#type: FrameType::Handshake as _,
+            nonce: 0,
+            data: initiator_handshake.to_vec().into(),
+        };
+
+        let from = "127.0.0.1:8888".parse().unwrap();
+        let (mut encrypt_actor, frame) = EncryptActor::new(
+            mailbox_sender.clone(),
+            mailbox,
+            udp_sender,
+            tun_sender,
+            responder_keypair.private.into(),
+            frame,
+            from,
+            Duration::from_secs(10),
+            &set,
+            &ConnectedPeers::default(),
+        )
+        .unwrap();
+
+        assert_eq!(frame.r#type(), FrameType::Handshake);
+
+        match initiator_encrypt.initiator_handshake_response(&frame.data) {
+            HandshakeState::PeerPublicKey(peer) => assert_eq!(peer, &responder_keypair.public),
+            state => {
+                panic!("invalid state {state:?}");
+            }
+        }
+
+        initiator_encrypt = initiator_encrypt.into_transport_mode().unwrap();
+
+        tokio::spawn(async move { encrypt_actor.run().await });
+
+        let data = FrameData {
+            data_or_heartbeat: Some(DataOrHeartbeat::Data(Bytes::from_static(b"hello"))),
+        }
+        .encode_to_vec();
+        let nonce = util::generate_nonce();
+        let mut buf = vec![0; 65535];
+        let n = initiator_encrypt.encrypt(nonce, &data, &mut buf).unwrap();
+
+        let frame = Frame {
+            r#type: FrameType::Transport as _,
+            nonce,
+            data: Bytes::copy_from_slice(&buf[..n]),
+        };
+
+        mailbox_sender
+            .send(Message::Frame { frame, from })
+            .await
+            .unwrap();
+
+        let tun_message = tun_mailbox.next().await.unwrap();
+        match tun_message {
+            TunMessage::ToTun(data) => assert_eq!(data.as_ref(), b"hello"),
+            _ => panic!("inlaid tun message"),
+        }
+
+        mailbox_sender
+            .send(Message::Packet(Bytes::from_static(b"world")))
+            .await
+            .unwrap();
+
+        let udp_message = udp_mailbox.next().await.unwrap();
+        match udp_message {
+            UdpMessage::Frame { frame, to } => {
+                assert_eq!(to, from);
+
+                assert_eq!(frame.r#type(), FrameType::Transport);
+
+                let n = initiator_encrypt
+                    .decrypt(frame.nonce, &frame.data, &mut buf)
+                    .unwrap();
+                let frame_data = FrameData::decode(&buf[..n]).unwrap();
+                assert_eq!(
+                    frame_data.data_or_heartbeat,
+                    Some(DataOrHeartbeat::Data(Bytes::from_static(b"world")))
+                );
+            }
+
+            _ => {
+                panic!("invalid udp message");
+            }
+        }
+    }
+}
