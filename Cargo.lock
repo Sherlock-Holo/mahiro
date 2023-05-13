@@ -425,6 +425,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cola"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cidr",
+ "clap",
+ "derivative",
+ "futures-util",
+ "netlink-packet-route",
+ "rtnetlink",
+ "tap",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
