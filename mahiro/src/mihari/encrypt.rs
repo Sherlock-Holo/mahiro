@@ -16,7 +16,7 @@ use tracing::{debug, error, instrument, warn};
 use super::connected_peer::ConnectedPeers;
 use super::message::EncryptMessage as Message;
 use super::message::{TunMessage, UdpMessage};
-use crate::encrypt::{Encrypt, HandshakeState};
+use crate::encrypt::Encrypt;
 use crate::ip_packet;
 use crate::ip_packet::IpLocation;
 use crate::protocol::frame_data::DataOrHeartbeat;
@@ -83,61 +83,48 @@ impl EncryptActor {
                 let mut encrypt = Encrypt::new_responder(&local_private_key)
                     .tap_err(|err| error!(%err, "create responder encrypt failed"))?;
 
-                match encrypt.responder_handshake(&frame.data) {
-                    HandshakeState::Failed(err) => {
-                        error!(%err, "responder handshake failed");
+                let responder_handshake_success = encrypt.responder_handshake(&frame.data)?;
+                if !remote_public_keys.contains(responder_handshake_success.peer_public_key) {
+                    error!("unknown public key");
 
-                        Err(err.into())
-                    }
-                    HandshakeState::MissPeerPublicKey => {
-                        error!("miss peer public key");
-
-                        Err(anyhow::anyhow!("miss peer public key"))
-                    }
-                    HandshakeState::PeerPublicKey(public_key) => {
-                        if !remote_public_keys.contains(public_key) {
-                            error!("unknown public key");
-
-                            return Err(anyhow::anyhow!("unknown public key"));
-                        }
-
-                        let response = encrypt.responder_handshake_response()?;
-                        let handshake_response_frame = Frame {
-                            r#type: FrameType::Handshake as _,
-                            nonce: 0,
-                            data: Bytes::copy_from_slice(response),
-                        };
-
-                        encrypt = encrypt.into_transport_mode()?;
-
-                        let heartbeat_task = {
-                            let mailbox_sender = mailbox_sender.clone();
-                            tokio::spawn(Self::heartbeat(heartbeat_interval, mailbox_sender))
-                        };
-
-                        Ok((
-                            Self {
-                                mailbox_sender,
-                                mailbox,
-                                udp_sender,
-                                tun_sender,
-                                state: State::Transport {
-                                    encrypt,
-                                    buffer: vec![0; 65535],
-                                    heartbeat_receive_instant: Instant::now(),
-                                    heartbeat_task,
-                                    remote_addr: from,
-                                    saved_mahiro_ipv4: false,
-                                    saved_mahiro_ipv6: false,
-                                    saved_mahiro_link_local_ipv6: false,
-                                    connected_peers: connected_peers.clone(),
-                                },
-                                heartbeat_interval,
-                            },
-                            handshake_response_frame,
-                        ))
-                    }
+                    return Err(anyhow::anyhow!("unknown public key"));
                 }
+
+                let response = encrypt.responder_handshake_response(&[])?;
+                let handshake_response_frame = Frame {
+                    r#type: FrameType::Handshake as _,
+                    nonce: 0,
+                    data: Bytes::copy_from_slice(response),
+                };
+
+                encrypt = encrypt.into_transport_mode()?;
+
+                let heartbeat_task = {
+                    let mailbox_sender = mailbox_sender.clone();
+                    tokio::spawn(Self::heartbeat(heartbeat_interval, mailbox_sender))
+                };
+
+                Ok((
+                    Self {
+                        mailbox_sender,
+                        mailbox,
+                        udp_sender,
+                        tun_sender,
+                        state: State::Transport {
+                            encrypt,
+                            buffer: vec![0; 65535],
+                            heartbeat_receive_instant: Instant::now(),
+                            heartbeat_task,
+                            remote_addr: from,
+                            saved_mahiro_ipv4: false,
+                            saved_mahiro_ipv6: false,
+                            saved_mahiro_link_local_ipv6: false,
+                            connected_peers: connected_peers.clone(),
+                        },
+                        heartbeat_interval,
+                    },
+                    handshake_response_frame,
+                ))
             }
         }
     }
@@ -479,7 +466,8 @@ mod tests {
     async fn test() {
         let initiator_keypair = Encrypt::generate_keypair().unwrap();
         let responder_keypair = Encrypt::generate_keypair().unwrap();
-        let mut initiator_encrypt = Encrypt::new_initiator(&initiator_keypair.private).unwrap();
+        let mut initiator_encrypt =
+            Encrypt::new_initiator(&initiator_keypair.private, &responder_keypair.public).unwrap();
         let (tun_sender, mut tun_mailbox) = mpsc::channel(10);
         let (udp_sender, mut udp_mailbox) = mpsc::channel(10);
         let (mut mailbox_sender, mailbox) = mpsc::channel(10);
@@ -487,7 +475,7 @@ mod tests {
         let set = DashSet::new();
         set.insert(PublicKey::from(Bytes::from(initiator_keypair.public)));
 
-        let initiator_handshake = initiator_encrypt.initiator_handshake().unwrap();
+        let initiator_handshake = initiator_encrypt.initiator_handshake(&[]).unwrap();
         let frame = Frame {
             r#type: FrameType::Handshake as _,
             nonce: 0,
@@ -511,12 +499,9 @@ mod tests {
 
         assert_eq!(frame.r#type(), FrameType::Handshake);
 
-        match initiator_encrypt.initiator_handshake_response(&frame.data) {
-            HandshakeState::PeerPublicKey(peer) => assert_eq!(peer, &responder_keypair.public),
-            state => {
-                panic!("invalid state {state:?}");
-            }
-        }
+        initiator_encrypt
+            .initiator_handshake_response(&frame.data)
+            .unwrap();
 
         initiator_encrypt = initiator_encrypt.into_transport_mode().unwrap();
 

@@ -12,7 +12,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::message::EncryptMessage as Message;
-use crate::encrypt::{Encrypt, HandshakeState};
+use crate::encrypt::Encrypt;
 use crate::mahiro::message::{TunMessage, UdpMessage};
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
@@ -60,7 +60,7 @@ pub struct EncryptActor {
 
     #[derivative(Debug = "ignore")]
     local_private_key: Bytes,
-    remote_public_key: PublicKey,
+    peer_public_key: PublicKey,
 }
 
 impl EncryptActor {
@@ -71,9 +71,10 @@ impl EncryptActor {
         mailbox: Receiver<Message>,
         heartbeat_interval: Duration,
         local_private_key: Bytes,
-        remote_public_key: PublicKey,
+        peer_public_key: PublicKey,
     ) -> anyhow::Result<Self> {
-        let state = Self::start(&local_private_key, mailbox_sender.clone()).await?;
+        let state =
+            Self::start(&local_private_key, &peer_public_key, mailbox_sender.clone()).await?;
 
         Ok(Self {
             mailbox_sender,
@@ -83,15 +84,16 @@ impl EncryptActor {
             state,
             heartbeat_interval,
             local_private_key,
-            remote_public_key,
+            peer_public_key,
         })
     }
 
     async fn start(
         local_private_key: &[u8],
+        peer_public_key: &[u8],
         mut mailbox_sender: Sender<Message>,
     ) -> anyhow::Result<State> {
-        let encrypt = Encrypt::new_initiator(local_private_key)
+        let encrypt = Encrypt::new_initiator(local_private_key, peer_public_key)
             .tap_err(|err| error!(%err, "create initiator encrypt failed"))?;
         let state = State::Uninit {
             encrypt: Some(encrypt),
@@ -106,7 +108,12 @@ impl EncryptActor {
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
-        let state = Self::start(&self.local_private_key, self.mailbox_sender.clone()).await?;
+        let state = Self::start(
+            &self.local_private_key,
+            &self.peer_public_key,
+            self.mailbox_sender.clone(),
+        )
+        .await?;
         self.state = state;
 
         Ok(())
@@ -182,7 +189,6 @@ impl EncryptActor {
                 if let Some(new_state) = Self::handle_handshake(
                     message,
                     encrypt,
-                    &self.remote_public_key,
                     self.heartbeat_interval,
                     self.mailbox_sender.clone(),
                 )
@@ -265,7 +271,7 @@ impl EncryptActor {
         mailbox_sender: &Sender<Message>,
         udp_sender: &mut Sender<UdpMessage>,
     ) -> anyhow::Result<Option<State>> {
-        let handshake = Bytes::from(encrypt.initiator_handshake()?.to_vec());
+        let handshake = Bytes::from(encrypt.initiator_handshake(&[])?.to_vec());
 
         let frame = Frame {
             r#type: FrameType::Handshake as _,
@@ -293,7 +299,6 @@ impl EncryptActor {
     async fn handle_handshake(
         message: Message,
         encrypt: &mut Option<Encrypt>,
-        remote_public_key: &[u8],
         heartbeat_interval: Duration,
         mailbox_sender: Sender<Message>,
     ) -> anyhow::Result<Option<State>> {
@@ -320,44 +325,23 @@ impl EncryptActor {
             }
         };
 
-        return match encrypt
+        encrypt
             .as_mut()
             .unwrap()
-            .initiator_handshake_response(&data)
-        {
-            HandshakeState::Failed(err) => {
-                error!(%err, "handshake failed");
+            .initiator_handshake_response(&data)?;
 
-                Err(err.into())
-            }
+        let mut encrypt = encrypt.take().unwrap();
+        encrypt = encrypt.into_transport_mode()?;
 
-            HandshakeState::MissPeerPublicKey => {
-                error!("invalid handshake");
+        let heartbeat_task =
+            tokio::spawn(async move { Self::heartbeat(heartbeat_interval, mailbox_sender).await });
 
-                Ok(None)
-            }
-            HandshakeState::PeerPublicKey(public_key) => {
-                if remote_public_key != public_key {
-                    error!("incorrect public key");
-
-                    return Err(anyhow::anyhow!("incorrect public key"));
-                }
-
-                let mut encrypt = encrypt.take().unwrap();
-                encrypt = encrypt.into_transport_mode()?;
-
-                let heartbeat_task = tokio::spawn(async move {
-                    Self::heartbeat(heartbeat_interval, mailbox_sender).await
-                });
-
-                Ok(Some(State::Transport {
-                    encrypt,
-                    buffer: vec![0; 65535],
-                    heartbeat_receive_instant: Instant::now(),
-                    heartbeat_task,
-                }))
-            }
-        };
+        Ok(Some(State::Transport {
+            encrypt,
+            buffer: vec![0; 65535],
+            heartbeat_receive_instant: Instant::now(),
+            heartbeat_task,
+        }))
     }
 
     async fn handle_transport_packet(
@@ -529,7 +513,7 @@ mod tests {
 
     #[test(tokio::test)]
     async fn test() {
-        let noise_params = NoiseParams::from_str("Noise_IX_25519_ChaChaPoly_BLAKE2s").unwrap();
+        let noise_params = NoiseParams::from_str("Noise_IK_25519_ChaChaPoly_BLAKE2s").unwrap();
         let builder = Builder::new(noise_params);
         let initiator_keypair = builder.generate_keypair().unwrap();
         let responder_keypair = builder.generate_keypair().unwrap();
