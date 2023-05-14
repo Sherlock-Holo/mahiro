@@ -12,7 +12,7 @@ use netlink_packet_route::{
 };
 use rtnetlink::{Handle, IpVersion, LinkHandle, RouteHandle, RuleHandle};
 use tap::TapFallible;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 const TABLE_ID: u32 = 25;
 
@@ -70,7 +70,7 @@ impl RouteTable {
         Ok(())
     }
 
-    #[instrument(skip(self), err)]
+    #[instrument(skip(self, route_entries), err)]
     pub async fn set_route(&mut self, route_entries: &[RouteEntry]) -> anyhow::Result<()> {
         self.add_route_entries(route_entries).await?;
         self.add_route_rule().await?;
@@ -78,7 +78,7 @@ impl RouteTable {
         Ok(())
     }
 
-    #[instrument(skip(self), err)]
+    #[instrument(skip(self, new_route_entries), err)]
     async fn add_route_entries(&mut self, new_route_entries: &[RouteEntry]) -> anyhow::Result<()> {
         let mut iface_index_cache = HashMap::new();
         for route_entry in new_route_entries {
@@ -112,21 +112,53 @@ impl RouteTable {
 
             match route_entry.addr {
                 IpAddr::V4(addr) => {
-                    add_request
+                    match add_request
                         .v4()
                         .destination_prefix(addr, route_entry.prefix)
-                        .execute().await.tap_err(|err| {
-                        error!(%err, %addr, prefix = %route_entry.prefix, "add route entry failed");
-                    })?;
+                        .execute()
+                        .await
+                    {
+                        Err(rtnetlink::Error::NetlinkError(err))
+                            if err.to_io().kind() == ErrorKind::AlreadyExists =>
+                        {
+                            debug!(?route_entry, "ipv4 route entry exists");
+
+                            continue;
+                        }
+
+                        Err(err) => {
+                            error!(%err, %addr, prefix = %route_entry.prefix, "add route entry failed");
+
+                            return Err(err.into());
+                        }
+
+                        Ok(_) => {}
+                    }
                 }
 
                 IpAddr::V6(addr) => {
-                    add_request
+                    match add_request
                         .v6()
                         .destination_prefix(addr, route_entry.prefix)
-                        .execute().await.tap_err(|err| {
-                        error!(%err, %addr, prefix = %route_entry.prefix, "add route entry failed");
-                    })?;
+                        .execute()
+                        .await
+                    {
+                        Err(rtnetlink::Error::NetlinkError(err))
+                            if err.to_io().kind() == ErrorKind::AlreadyExists =>
+                        {
+                            debug!(?route_entry, "ipv6 route entry exists");
+
+                            continue;
+                        }
+
+                        Err(err) => {
+                            error!(%err, %addr, prefix = %route_entry.prefix, "add route entry failed");
+
+                            return Err(err.into());
+                        }
+
+                        Ok(_) => {}
+                    }
                 }
             }
         }
@@ -134,6 +166,7 @@ impl RouteTable {
         Ok(())
     }
 
+    #[instrument(skip(self), err)]
     async fn add_route_rule(&mut self) -> anyhow::Result<()> {
         let mut rule_add_request = self.rule_handle.add().v4().table(RT_TABLE_COMPAT);
         rule_add_request

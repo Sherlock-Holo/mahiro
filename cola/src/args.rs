@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 pub struct Args {
-    /// enable debug log
+    /// enable log
     #[arg(short, long)]
     pub debug: bool,
 
