@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::{error, info};
 use tun::AsyncDevice;
 
-const MTU: u32 = 1400;
+const MTU: u32 = 1280;
 
 #[derive(Derivative)]
 #[derivative(Debug)]

@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -17,6 +17,7 @@ use super::message::{TunMessage, UdpMessage};
 use super::peer_store::PeerStore;
 use crate::cookie::COOKIE_LENGTH;
 use crate::encrypt::Encrypt;
+use crate::ip_packet::{get_packet_ip, IpLocation};
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::timestamp::generate_timestamp;
@@ -34,6 +35,7 @@ enum State {
         heartbeat_task: JoinHandle<()>,
         connected_peers: PeerStore,
         latest_timestamp: u64,
+        has_save_link_local_ipv6: bool,
     },
 }
 
@@ -46,6 +48,7 @@ impl Drop for State {
 
 #[derive(Debug)]
 pub struct EncryptActor {
+    mailbox_sender: Sender<Message>,
     mailbox: Receiver<Message>,
     udp_sender: Sender<UdpMessage>,
     tun_sender: Sender<TunMessage>,
@@ -125,10 +128,11 @@ impl EncryptActor {
 
                 // make sure tun actor can find this encrypt actor
                 peer_store.add_mahiro_ip(mahiro_ipv4.into(), mailbox_sender.clone());
-                peer_store.add_mahiro_ip(mahiro_ipv6.into(), mailbox_sender);
+                peer_store.add_mahiro_ip(mahiro_ipv6.into(), mailbox_sender.clone());
 
                 Ok((
                     Self {
+                        mailbox_sender,
                         mailbox,
                         udp_sender,
                         tun_sender,
@@ -140,6 +144,7 @@ impl EncryptActor {
                             heartbeat_task,
                             connected_peers: peer_store.clone(),
                             latest_timestamp: timestamp,
+                            has_save_link_local_ipv6: false,
                         },
                         heartbeat_interval,
                     },
@@ -189,6 +194,7 @@ impl EncryptActor {
                 heartbeat_receive_instant,
                 connected_peers,
                 latest_timestamp,
+                has_save_link_local_ipv6,
                 ..
             } => match message {
                 Message::Packet(packet) => {
@@ -216,10 +222,12 @@ impl EncryptActor {
                         buffer,
                         encrypt,
                         heartbeat_receive_instant,
+                        mailbox_sender: &mut self.mailbox_sender,
                         udp_sender: &mut self.udp_sender,
                         tun_sender: &mut self.tun_sender,
-                        connected_peers,
+                        peer_store: connected_peers,
                         latest_timestamp,
+                        has_save_link_local_ipv6,
                     })
                     .await?;
 
@@ -289,10 +297,12 @@ impl EncryptActor {
             buffer,
             encrypt,
             heartbeat_receive_instant,
+            mailbox_sender,
             udp_sender,
             tun_sender,
-            connected_peers,
+            peer_store,
             latest_timestamp,
+            has_save_link_local_ipv6,
         }: HandleHandshakeFrameArgs<'_>,
     ) -> anyhow::Result<()> {
         match frame.r#type() {
@@ -368,6 +378,29 @@ impl EncryptActor {
                     }
 
                     Some(DataOrHeartbeat::Data(data)) => {
+                        if !*has_save_link_local_ipv6 {
+                            match get_packet_ip(data, IpLocation::Src) {
+                                None => {
+                                    error!("drop not ip packet");
+
+                                    return Ok(());
+                                }
+
+                                Some(src_ip) => {
+                                    if let IpAddr::V6(src_ip) = src_ip {
+                                        if src_ip.is_unicast_link_local() {
+                                            peer_store.add_mahiro_ip(
+                                                src_ip.into(),
+                                                mailbox_sender.clone(),
+                                            );
+
+                                            *has_save_link_local_ipv6 = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         tun_sender
                             .send(TunMessage::ToTun(data.clone()))
                             .await
@@ -376,7 +409,7 @@ impl EncryptActor {
                 }
 
                 if frame_data.timestamp > *latest_timestamp {
-                    if let Some(old_addr) = connected_peers.update_peer_addr(&frame.cookie, from) {
+                    if let Some(old_addr) = peer_store.update_peer_addr(&frame.cookie, from) {
                         info!(%old_addr, new_addr = %from, "peer update addr done");
                     }
                 }
@@ -432,10 +465,12 @@ struct HandleHandshakeFrameArgs<'a> {
     buffer: &'a mut [u8],
     encrypt: &'a Encrypt,
     heartbeat_receive_instant: &'a mut Instant,
+    mailbox_sender: &'a mut Sender<Message>,
     udp_sender: &'a mut Sender<UdpMessage>,
     tun_sender: &'a mut Sender<TunMessage>,
-    connected_peers: &'a PeerStore,
+    peer_store: &'a PeerStore,
     latest_timestamp: &'a mut u64,
+    has_save_link_local_ipv6: &'a mut bool,
 }
 
 fn get_peer_addr_by_cookie(
