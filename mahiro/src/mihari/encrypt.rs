@@ -20,14 +20,17 @@ use crate::encrypt::Encrypt;
 use crate::ip_packet::{get_packet_ip, IpLocation};
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
+use crate::public_key::PublicKey;
 use crate::timestamp::generate_timestamp;
 use crate::{util, HEARTBEAT_DATA};
+
+type Cookie = PublicKey;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 enum State {
     Transport {
-        cookie: Bytes,
+        cookie: Cookie,
         encrypt: Encrypt,
         #[derivative(Debug = "ignore")]
         buffer: Vec<u8>,
@@ -137,7 +140,7 @@ impl EncryptActor {
                         udp_sender,
                         tun_sender,
                         state: State::Transport {
-                            cookie: frame.cookie,
+                            cookie: frame.cookie.into(),
                             encrypt,
                             buffer: vec![0; 65535],
                             heartbeat_receive_instant: Instant::now(),
