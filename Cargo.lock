@@ -431,7 +431,6 @@ dependencies = [
  "anyhow",
  "cidr",
  "clap",
- "derivative",
  "futures-util",
  "netlink-packet-route",
  "rtnetlink",

@@ -13,7 +13,6 @@ tokio-stream = { version = "0.1", features = ["io-util"] }
 clap = { version = "4", features = ["derive"] }
 
 anyhow = "1"
-derivative = "2"
 tap = "1"
 tracing = "0.1"
 
