@@ -372,7 +372,7 @@ impl EncryptActor {
             timestamp: generate_timestamp(),
             data_or_heartbeat: Some(DataOrHeartbeat::Data(packet)),
         }
-        .encode_to_vec();
+        .encode_length_delimited_to_vec();
         let n = encrypt.encrypt(nonce, &data, buffer)?;
         let data = Bytes::copy_from_slice(&buffer[..n]);
 
@@ -425,7 +425,7 @@ impl EncryptActor {
                     Ok(n) => &buffer[..n],
                 };
 
-                let frame_data = match FrameData::decode(data) {
+                let frame_data = match FrameData::decode_length_delimited(data) {
                     Err(err) => {
                         error!(%err, "decode frame data failed");
 
@@ -458,7 +458,7 @@ impl EncryptActor {
                                     HEARTBEAT_DATA,
                                 ))),
                             }
-                            .encode_to_vec();
+                            .encode_length_delimited_to_vec();
 
                             let nonce = util::generate_nonce();
                             let n = encrypt.encrypt(nonce, &pong_frame_data, buffer)?;
@@ -510,7 +510,7 @@ impl EncryptActor {
             timestamp: generate_timestamp(),
             data_or_heartbeat: Some(DataOrHeartbeat::Ping(Bytes::from_static(HEARTBEAT_DATA))),
         }
-        .encode_to_vec();
+        .encode_length_delimited_to_vec();
         let nonce = util::generate_nonce();
 
         let n = encrypt.encrypt(nonce, &ping_frame_data, buffer)?;
@@ -630,7 +630,7 @@ mod tests {
             timestamp: generate_timestamp(),
             data_or_heartbeat: Some(DataOrHeartbeat::Data(Bytes::from_static(b"mihari"))),
         }
-        .encode_to_vec();
+        .encode_length_delimited_to_vec();
         let nonce = util::generate_nonce();
         let n = transport_state
             .write_message(nonce, &frame_data, &mut buf)
@@ -676,7 +676,7 @@ mod tests {
             let n = transport_state
                 .read_message(frame.nonce, &frame.data, buf)
                 .unwrap();
-            let frame_data = FrameData::decode(&buf[..n]).unwrap();
+            let frame_data = FrameData::decode_length_delimited(&buf[..n]).unwrap();
             let data = match frame_data.data_or_heartbeat {
                 Some(DataOrHeartbeat::Data(data)) => data,
                 Some(DataOrHeartbeat::Ping(_)) => {
