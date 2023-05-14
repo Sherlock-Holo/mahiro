@@ -11,33 +11,36 @@ use tap::TapFallible;
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::connected_peer::ConnectedPeers;
 use super::message::EncryptMessage as Message;
 use super::message::{TunMessage, UdpMessage};
+use crate::cookie::COOKIE_LENGTH;
 use crate::encrypt::Encrypt;
 use crate::ip_packet;
 use crate::ip_packet::IpLocation;
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::public_key::PublicKey;
+use crate::timestamp::generate_timestamp;
 use crate::{util, HEARTBEAT_DATA};
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 enum State {
     Transport {
+        cookie: Bytes,
         encrypt: Encrypt,
         #[derivative(Debug = "ignore")]
         buffer: Vec<u8>,
         heartbeat_receive_instant: Instant,
         heartbeat_task: JoinHandle<()>,
-        remote_addr: SocketAddr,
         saved_mahiro_ipv4: bool,
         saved_mahiro_ipv6: bool,
         saved_mahiro_link_local_ipv6: bool,
         connected_peers: ConnectedPeers,
+        latest_timestamp: u64,
     },
 }
 
@@ -68,11 +71,19 @@ impl EncryptActor {
         tun_sender: Sender<TunMessage>,
         local_private_key: Bytes,
         frame: Frame,
-        from: SocketAddr,
         heartbeat_interval: Duration,
         remote_public_keys: &DashSet<PublicKey>,
         connected_peers: &ConnectedPeers,
     ) -> anyhow::Result<(Self, Frame)> {
+        if frame.cookie.len() != COOKIE_LENGTH {
+            error!("drop invalid length cookie frame");
+
+            return Err(anyhow::anyhow!(
+                "invalid cookie length {}",
+                frame.cookie.len()
+            ));
+        }
+
         match frame.r#type() {
             FrameType::Transport => {
                 error!("unexpected transport frame");
@@ -90,8 +101,18 @@ impl EncryptActor {
                     return Err(anyhow::anyhow!("unknown public key"));
                 }
 
+                if responder_handshake_success.payload.len() != 8 {
+                    error!("invalid handshake timestamp payload");
+
+                    return Err(anyhow::anyhow!("invalid handshake timestamp payload"));
+                }
+
+                let timestamp =
+                    u64::from_be_bytes(responder_handshake_success.payload.try_into().unwrap());
+
                 let response = encrypt.responder_handshake_response(&[])?;
                 let handshake_response_frame = Frame {
+                    cookie: frame.cookie.clone(),
                     r#type: FrameType::Handshake as _,
                     nonce: 0,
                     data: Bytes::copy_from_slice(response),
@@ -111,15 +132,16 @@ impl EncryptActor {
                         udp_sender,
                         tun_sender,
                         state: State::Transport {
+                            cookie: frame.cookie,
                             encrypt,
                             buffer: vec![0; 65535],
                             heartbeat_receive_instant: Instant::now(),
                             heartbeat_task,
-                            remote_addr: from,
                             saved_mahiro_ipv4: false,
                             saved_mahiro_ipv6: false,
                             saved_mahiro_link_local_ipv6: false,
                             connected_peers: connected_peers.clone(),
+                            latest_timestamp: timestamp,
                         },
                         heartbeat_interval,
                     },
@@ -163,20 +185,24 @@ impl EncryptActor {
 
         match &mut self.state {
             State::Transport {
+                cookie,
                 encrypt,
                 buffer,
                 heartbeat_receive_instant,
-                remote_addr,
                 saved_mahiro_ipv4,
                 saved_mahiro_ipv6,
                 saved_mahiro_link_local_ipv6,
                 connected_peers,
+                latest_timestamp,
                 ..
             } => match message {
                 Message::Packet(packet) => {
+                    let remote_addr = get_peer_addr_by_cookie(connected_peers, cookie)?;
+
                     Self::handle_transport_packet(
+                        cookie,
                         packet,
-                        *remote_addr,
+                        remote_addr,
                         buffer,
                         encrypt,
                         &mut self.udp_sender,
@@ -202,6 +228,7 @@ impl EncryptActor {
                         udp_sender: &mut self.udp_sender,
                         tun_sender: &mut self.tun_sender,
                         connected_peers,
+                        latest_timestamp,
                     })
                     .await?;
 
@@ -211,9 +238,12 @@ impl EncryptActor {
                 }
 
                 Message::Heartbeat => {
+                    let remote_addr = get_peer_addr_by_cookie(connected_peers, cookie)?;
+
                     Self::handle_transport_heartbeat(
+                        cookie,
                         buffer,
-                        *remote_addr,
+                        remote_addr,
                         encrypt,
                         self.heartbeat_interval,
                         heartbeat_receive_instant,
@@ -230,6 +260,7 @@ impl EncryptActor {
     }
 
     async fn handle_transport_packet(
+        cookie: &Bytes,
         packet: Bytes,
         to: SocketAddr,
         buffer: &mut [u8],
@@ -238,6 +269,7 @@ impl EncryptActor {
     ) -> anyhow::Result<()> {
         let nonce = util::generate_nonce();
         let data = FrameData {
+            timestamp: generate_timestamp(),
             data_or_heartbeat: Some(DataOrHeartbeat::Data(packet)),
         }
         .encode_to_vec();
@@ -245,6 +277,7 @@ impl EncryptActor {
         let data = Bytes::copy_from_slice(&buffer[..n]);
 
         let frame = Frame {
+            cookie: cookie.clone(),
             r#type: FrameType::Transport as _,
             nonce,
             data,
@@ -272,6 +305,7 @@ impl EncryptActor {
             udp_sender,
             tun_sender,
             connected_peers,
+            latest_timestamp,
         }: HandleHandshakeFrameArgs<'_>,
     ) -> anyhow::Result<()> {
         match frame.r#type() {
@@ -308,7 +342,7 @@ impl EncryptActor {
                     None => {
                         error!("miss frame data");
 
-                        Ok(())
+                        return Ok(());
                     }
 
                     Some(DataOrHeartbeat::Pong(data) | DataOrHeartbeat::Ping(data)) => {
@@ -322,6 +356,7 @@ impl EncryptActor {
                             *heartbeat_receive_instant = Instant::now();
                         } else {
                             let pong_frame_data = FrameData {
+                                timestamp: generate_timestamp(),
                                 data_or_heartbeat: Some(DataOrHeartbeat::Pong(Bytes::from_static(
                                     HEARTBEAT_DATA,
                                 ))),
@@ -332,6 +367,7 @@ impl EncryptActor {
                             let n = encrypt.encrypt(nonce, &pong_frame_data, buffer)?;
                             let pong_data = Bytes::copy_from_slice(&buffer[..n]);
                             let frame = Frame {
+                                cookie: frame.cookie.clone(),
                                 r#type: FrameType::Transport as _,
                                 nonce,
                                 data: pong_data,
@@ -342,8 +378,6 @@ impl EncryptActor {
                                 .await
                                 .tap_err(|err| error!(%err, "send pong frame failed"))?;
                         }
-
-                        Ok(())
                     }
 
                     Some(DataOrHeartbeat::Data(data)) => {
@@ -395,15 +429,22 @@ impl EncryptActor {
                             .send(TunMessage::ToTun(data.clone()))
                             .await
                             .tap_err(|err| error!(%err, "send packet failed"))?;
-
-                        Ok(())
                     }
                 }
+
+                if frame_data.timestamp > *latest_timestamp {
+                    if let Some(old_addr) = connected_peers.update_peer_addr(&frame.cookie, from) {
+                        info!(%old_addr, new_addr = %from, "peer update addr done");
+                    }
+                }
+
+                Ok(())
             }
         }
     }
 
     async fn handle_transport_heartbeat(
+        cookie: &Bytes,
         buffer: &mut [u8],
         to: SocketAddr,
         encrypt: &Encrypt,
@@ -418,6 +459,7 @@ impl EncryptActor {
         }
 
         let ping_frame_data = FrameData {
+            timestamp: generate_timestamp(),
             data_or_heartbeat: Some(DataOrHeartbeat::Ping(Bytes::from_static(HEARTBEAT_DATA))),
         }
         .encode_to_vec();
@@ -426,6 +468,7 @@ impl EncryptActor {
         let n = encrypt.encrypt(nonce, &ping_frame_data, buffer)?;
 
         let frame = Frame {
+            cookie: cookie.clone(),
             r#type: FrameType::Transport as _,
             nonce,
             data: Bytes::copy_from_slice(&buffer[..n]),
@@ -453,6 +496,24 @@ struct HandleHandshakeFrameArgs<'a> {
     udp_sender: &'a mut Sender<UdpMessage>,
     tun_sender: &'a mut Sender<TunMessage>,
     connected_peers: &'a ConnectedPeers,
+    latest_timestamp: &'a mut u64,
+}
+
+fn get_peer_addr_by_cookie(
+    connected_peers: &ConnectedPeers,
+    cookie: &Bytes,
+) -> anyhow::Result<SocketAddr> {
+    match connected_peers.get_peer_info_by_cookie(cookie) {
+        None => {
+            error!("peer info miss, encrypt actor in invalid status");
+
+            Err(anyhow::anyhow!(
+                "peer info miss, encrypt actor in invalid status"
+            ))
+        }
+
+        Some(peer_info) => Ok(peer_info.addr),
+    }
 }
 
 #[cfg(test)]
@@ -461,6 +522,7 @@ mod tests {
     use test_log::test;
 
     use super::*;
+    use crate::cookie::generate_cookie;
 
     #[test(tokio::test)]
     async fn test() {
@@ -475,14 +537,19 @@ mod tests {
         let set = DashSet::new();
         set.insert(PublicKey::from(Bytes::from(initiator_keypair.public)));
 
-        let initiator_handshake = initiator_encrypt.initiator_handshake(&[]).unwrap();
+        let cookie = generate_cookie();
+        let timestamp = generate_timestamp().to_be_bytes();
+        let initiator_handshake = initiator_encrypt.initiator_handshake(&timestamp).unwrap();
         let frame = Frame {
+            cookie: cookie.clone(),
             r#type: FrameType::Handshake as _,
             nonce: 0,
             data: initiator_handshake.to_vec().into(),
         };
 
+        let connected_peers = ConnectedPeers::default();
         let from = "127.0.0.1:8888".parse().unwrap();
+        connected_peers.add_peer_info(cookie.clone(), from, mailbox_sender.clone());
         let (mut encrypt_actor, frame) = EncryptActor::new(
             mailbox_sender.clone(),
             mailbox,
@@ -490,10 +557,9 @@ mod tests {
             tun_sender,
             responder_keypair.private.into(),
             frame,
-            from,
             Duration::from_secs(10),
             &set,
-            &ConnectedPeers::default(),
+            &connected_peers,
         )
         .unwrap();
 
@@ -508,6 +574,7 @@ mod tests {
         tokio::spawn(async move { encrypt_actor.run().await });
 
         let data = FrameData {
+            timestamp: generate_timestamp(),
             data_or_heartbeat: Some(DataOrHeartbeat::Data(Bytes::from_static(b"hello"))),
         }
         .encode_to_vec();
@@ -516,6 +583,7 @@ mod tests {
         let n = initiator_encrypt.encrypt(nonce, &data, &mut buf).unwrap();
 
         let frame = Frame {
+            cookie,
             r#type: FrameType::Transport as _,
             nonce,
             data: Bytes::copy_from_slice(&buf[..n]),

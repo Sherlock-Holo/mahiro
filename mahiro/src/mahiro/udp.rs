@@ -188,6 +188,7 @@ mod tests {
     use test_log::test;
 
     use super::*;
+    use crate::cookie::generate_cookie;
     use crate::protocol::FrameType;
 
     #[test(tokio::test)]
@@ -202,7 +203,9 @@ mod tests {
             .unwrap();
         tokio::spawn(async move { udp_actor.run().await });
 
+        let cookie = generate_cookie();
         let frame = Frame {
+            cookie: cookie.clone(),
             r#type: FrameType::Handshake as _,
             nonce: 0,
             data: Bytes::from_static(b"hello"),
@@ -222,6 +225,7 @@ mod tests {
         assert_eq!(frame, receive_frame);
 
         let frame = Frame {
+            cookie,
             r#type: FrameType::Handshake as _,
             nonce: 1,
             data: Bytes::from_static(b"world"),

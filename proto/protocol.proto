@@ -8,15 +8,17 @@ enum FrameType {
 }
 
 message Frame {
-  FrameType type = 1;
-  uint64 nonce = 2;
-  bytes data = 3;
+  bytes cookie = 1;
+  FrameType type = 2;
+  uint64 nonce = 3;
+  bytes data = 4;
 }
 
 message FrameData {
+  uint64 timestamp = 1;
   oneof data_or_heartbeat {
-    bytes data = 1;
-    bytes ping = 2;
-    bytes pong = 3;
+    bytes data = 2;
+    bytes ping = 3;
+    bytes pong = 4;
   }
 }

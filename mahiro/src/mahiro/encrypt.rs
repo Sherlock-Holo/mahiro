@@ -12,11 +12,13 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::message::EncryptMessage as Message;
+use crate::cookie::generate_cookie;
 use crate::encrypt::Encrypt;
 use crate::mahiro::message::{TunMessage, UdpMessage};
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::public_key::PublicKey;
+use crate::timestamp::generate_timestamp;
 use crate::{util, HEARTBEAT_DATA};
 
 #[derive(Derivative)]
@@ -27,10 +29,12 @@ enum State {
     },
 
     Handshake {
+        cookie: Bytes,
         encrypt: Option<Encrypt>,
     },
 
     Transport {
+        cookie: Bytes,
         encrypt: Encrypt,
         #[derivative(Debug = "ignore")]
         buffer: Vec<u8>,
@@ -185,9 +189,10 @@ impl EncryptActor {
                 Ok(())
             }
 
-            State::Handshake { encrypt } => {
+            State::Handshake { cookie, encrypt } => {
                 if let Some(new_state) = Self::handle_handshake(
                     message,
+                    cookie,
                     encrypt,
                     self.heartbeat_interval,
                     self.mailbox_sender.clone(),
@@ -203,6 +208,7 @@ impl EncryptActor {
             }
 
             State::Transport {
+                cookie,
                 encrypt,
                 buffer,
                 heartbeat_receive_instant,
@@ -218,6 +224,7 @@ impl EncryptActor {
 
                     Message::Packet(packet) => {
                         Self::handle_transport_packet(
+                            cookie,
                             packet,
                             buffer,
                             encrypt,
@@ -232,6 +239,7 @@ impl EncryptActor {
 
                     Message::Frame(frame) => {
                         Self::handle_transport_frame(
+                            cookie,
                             frame,
                             buffer,
                             encrypt,
@@ -248,6 +256,7 @@ impl EncryptActor {
 
                     Message::Heartbeat => {
                         Self::handle_transport_heartbeat(
+                            cookie,
                             buffer,
                             encrypt,
                             self.heartbeat_interval,
@@ -271,9 +280,13 @@ impl EncryptActor {
         mailbox_sender: &Sender<Message>,
         udp_sender: &mut Sender<UdpMessage>,
     ) -> anyhow::Result<Option<State>> {
-        let handshake = Bytes::from(encrypt.initiator_handshake(&[])?.to_vec());
+        let cookie = generate_cookie();
+        let timestamp = generate_timestamp();
+        let timestamp = timestamp.to_be_bytes();
+        let handshake = Bytes::from(encrypt.initiator_handshake(&timestamp)?.to_vec());
 
         let frame = Frame {
+            cookie: cookie.clone(),
             r#type: FrameType::Handshake as _,
             nonce: 0,
             data: handshake,
@@ -292,12 +305,14 @@ impl EncryptActor {
         });
 
         Ok(Some(State::Handshake {
+            cookie,
             encrypt: Some(encrypt),
         }))
     }
 
     async fn handle_handshake(
         message: Message,
+        cookie: &Bytes,
         encrypt: &mut Option<Encrypt>,
         heartbeat_interval: Duration,
         mailbox_sender: Sender<Message>,
@@ -337,6 +352,7 @@ impl EncryptActor {
             tokio::spawn(async move { Self::heartbeat(heartbeat_interval, mailbox_sender).await });
 
         Ok(Some(State::Transport {
+            cookie: cookie.clone(),
             encrypt,
             buffer: vec![0; 65535],
             heartbeat_receive_instant: Instant::now(),
@@ -345,6 +361,7 @@ impl EncryptActor {
     }
 
     async fn handle_transport_packet(
+        cookie: &Bytes,
         packet: Bytes,
         buffer: &mut [u8],
         encrypt: &Encrypt,
@@ -352,6 +369,7 @@ impl EncryptActor {
     ) -> anyhow::Result<()> {
         let nonce = util::generate_nonce();
         let data = FrameData {
+            timestamp: generate_timestamp(),
             data_or_heartbeat: Some(DataOrHeartbeat::Data(packet)),
         }
         .encode_to_vec();
@@ -359,6 +377,7 @@ impl EncryptActor {
         let data = Bytes::copy_from_slice(&buffer[..n]);
 
         let frame = Frame {
+            cookie: cookie.clone(),
             r#type: FrameType::Transport as _,
             nonce,
             data,
@@ -373,6 +392,7 @@ impl EncryptActor {
     }
 
     async fn handle_transport_frame(
+        cookie: &Bytes,
         frame: Frame,
         buffer: &mut [u8],
         encrypt: &Encrypt,
@@ -380,6 +400,12 @@ impl EncryptActor {
         udp_sender: &mut Sender<UdpMessage>,
         tun_sender: &mut Sender<TunMessage>,
     ) -> anyhow::Result<()> {
+        if frame.cookie != cookie {
+            error!("drop invalid cookie frame");
+
+            return Ok(());
+        }
+
         match frame.r#type() {
             FrameType::Handshake => {
                 warn!("receive handshake when actor is transport");
@@ -427,6 +453,7 @@ impl EncryptActor {
                             *heartbeat_receive_instant = Instant::now();
                         } else {
                             let pong_frame_data = FrameData {
+                                timestamp: generate_timestamp(),
                                 data_or_heartbeat: Some(DataOrHeartbeat::Pong(Bytes::from_static(
                                     HEARTBEAT_DATA,
                                 ))),
@@ -437,6 +464,7 @@ impl EncryptActor {
                             let n = encrypt.encrypt(nonce, &pong_frame_data, buffer)?;
                             let pong_data = Bytes::copy_from_slice(&buffer[..n]);
                             let frame = Frame {
+                                cookie: cookie.clone(),
                                 r#type: FrameType::Transport as _,
                                 nonce,
                                 data: pong_data,
@@ -465,6 +493,7 @@ impl EncryptActor {
     }
 
     async fn handle_transport_heartbeat(
+        cookie: &Bytes,
         buffer: &mut [u8],
         encrypt: &Encrypt,
         heartbeat_interval: Duration,
@@ -478,6 +507,7 @@ impl EncryptActor {
         }
 
         let ping_frame_data = FrameData {
+            timestamp: generate_timestamp(),
             data_or_heartbeat: Some(DataOrHeartbeat::Ping(Bytes::from_static(HEARTBEAT_DATA))),
         }
         .encode_to_vec();
@@ -486,6 +516,7 @@ impl EncryptActor {
         let n = encrypt.encrypt(nonce, &ping_frame_data, buffer)?;
 
         let frame = Frame {
+            cookie: cookie.clone(),
             r#type: FrameType::Transport as _,
             nonce,
             data: Bytes::copy_from_slice(&buffer[..n]),
@@ -559,8 +590,11 @@ mod tests {
             initiator_keypair.public
         );
 
-        let n = handshake_state.write_message(&[], &mut buf).unwrap();
+        let cookie = frame.cookie;
+        let timestamp = generate_timestamp().to_be_bytes();
+        let n = handshake_state.write_message(&timestamp, &mut buf).unwrap();
         let frame = Frame {
+            cookie: cookie.clone(),
             r#type: FrameType::Handshake as _,
             nonce: 0,
             data: Bytes::copy_from_slice(&buf[..n]),
@@ -593,6 +627,7 @@ mod tests {
         // ---- udp send to encrypt ----
 
         let frame_data = FrameData {
+            timestamp: generate_timestamp(),
             data_or_heartbeat: Some(DataOrHeartbeat::Data(Bytes::from_static(b"mihari"))),
         }
         .encode_to_vec();
@@ -601,6 +636,7 @@ mod tests {
             .write_message(nonce, &frame_data, &mut buf)
             .unwrap();
         let frame = Frame {
+            cookie,
             r#type: FrameType::Transport as _,
             nonce,
             data: Bytes::copy_from_slice(&buf[..n]),

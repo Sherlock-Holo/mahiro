@@ -191,9 +191,13 @@ impl UdpActor {
 
                 debug!("decode packet done");
 
-                match self.connected_peers.get_sender_by_udp_addr(from) {
-                    Some(mut sender) => {
-                        if let Err(err) = sender.send(EncryptMessage::Frame { frame, from }).await {
+                match self.connected_peers.get_peer_info_by_cookie(&frame.cookie) {
+                    Some(mut peer_info) => {
+                        if let Err(err) = peer_info
+                            .sender
+                            .send(EncryptMessage::Frame { frame, from })
+                            .await
+                        {
                             error!(%err, "send frame to encrypt actor failed");
 
                             return Err(err.into());
@@ -205,6 +209,7 @@ impl UdpActor {
                     }
 
                     None => {
+                        let cookie = frame.cookie.clone();
                         let (mailbox_sender, mailbox) = mpsc::channel(10);
                         match EncryptActor::new(
                             mailbox_sender.clone(),
@@ -213,7 +218,6 @@ impl UdpActor {
                             self.tun_sender.clone(),
                             self.local_private_key.clone(),
                             frame,
-                            from,
                             self.heartbeat_interval,
                             &self.remote_public_keys,
                             &self.connected_peers,
@@ -236,13 +240,17 @@ impl UdpActor {
 
                                 debug!(%from, "send packet back done");
 
-                                self.connected_peers.add_udp_addr(from, mailbox_sender);
+                                self.connected_peers.add_peer_info(
+                                    cookie.clone(),
+                                    from,
+                                    mailbox_sender,
+                                );
                                 let connected_peers = self.connected_peers.clone();
 
                                 tokio::spawn(async move {
                                     let _ = encrypt_actor.run().await;
 
-                                    connected_peers.remove_udp_addr(from);
+                                    connected_peers.remove_peer(&cookie);
                                 });
 
                                 Ok(())
