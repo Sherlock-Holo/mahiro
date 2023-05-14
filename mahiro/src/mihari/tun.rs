@@ -11,9 +11,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument};
 
-use super::connected_peer::ConnectedPeers;
 use super::message::EncryptMessage;
 use super::message::TunMessage as Message;
+use super::peer_store::PeerStore;
 use crate::ip_packet;
 use crate::ip_packet::IpLocation;
 use crate::tun::Tun;
@@ -22,7 +22,7 @@ use crate::tun::Tun;
 pub struct TunActor {
     mailbox_sender: Sender<Message>,
     mailbox: Receiver<Message>,
-    connected_peers: ConnectedPeers,
+    peer_store: PeerStore,
 
     tun: WriteHalf<Tun>,
     read_task: JoinHandle<()>,
@@ -37,7 +37,7 @@ impl TunActor {
     pub async fn new(
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
-        connected_peers: ConnectedPeers,
+        peer_store: PeerStore,
         tun_ipv4: Ipv4Inet,
         tun_ipv6: Ipv6Inet,
         tun_name: String,
@@ -55,7 +55,7 @@ impl TunActor {
         Ok(Self {
             mailbox_sender,
             mailbox,
-            connected_peers,
+            peer_store,
             tun,
             read_task,
             tun_ipv4,
@@ -218,7 +218,7 @@ impl TunActor {
                             }
                         }
 
-                        let mut sender = match self.connected_peers.get_sender_by_mahiro_ip(ip) {
+                        let mut sender = match self.peer_store.get_sender_by_mahiro_ip(ip) {
                             None => {
                                 debug!(%ip, "ip doesn't in connected peers, maybe peer is disconnected, drop it");
 

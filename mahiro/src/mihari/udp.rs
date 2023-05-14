@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::{Buf, Bytes, BytesMut};
-use dashmap::DashSet;
 use derivative::Derivative;
 use futures_channel::mpsc;
 use futures_channel::mpsc::{Receiver, Sender};
@@ -14,19 +13,18 @@ use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument};
 
-use super::connected_peer::ConnectedPeers;
 use super::encrypt::EncryptActor;
 use super::message::UdpMessage as Message;
 use super::message::{EncryptMessage, TunMessage};
+use super::peer_store::PeerStore;
 use crate::protocol::Frame;
-use crate::public_key::PublicKey;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct UdpActor {
     mailbox_sender: Sender<Message>,
     mailbox: Receiver<Message>,
-    connected_peers: ConnectedPeers,
+    peer_store: PeerStore,
     tun_sender: Sender<TunMessage>,
 
     udp_socket: Arc<UdpSocket>,
@@ -36,7 +34,6 @@ pub struct UdpActor {
     #[derivative(Debug = "ignore")]
     local_private_key: Bytes,
     heartbeat_interval: Duration,
-    remote_public_keys: DashSet<PublicKey>,
 }
 
 impl UdpActor {
@@ -44,26 +41,24 @@ impl UdpActor {
     pub async fn new(
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
-        connected_peers: ConnectedPeers,
+        peer_store: PeerStore,
         tun_sender: Sender<TunMessage>,
         listen_addr: SocketAddr,
         local_private_key: Bytes,
         heartbeat_interval: Duration,
-        remote_public_keys: DashSet<PublicKey>,
     ) -> anyhow::Result<Self> {
         let (udp_socket, read_task) = Self::start(listen_addr, mailbox_sender.clone()).await?;
 
         Ok(Self {
             mailbox_sender,
             mailbox,
-            connected_peers,
+            peer_store,
             tun_sender,
             udp_socket,
             read_task,
             listen_addr,
             local_private_key,
             heartbeat_interval,
-            remote_public_keys,
         })
     }
 
@@ -191,7 +186,7 @@ impl UdpActor {
 
                 debug!("decode packet done");
 
-                match self.connected_peers.get_peer_info_by_cookie(&frame.cookie) {
+                match self.peer_store.get_peer_info_by_cookie(&frame.cookie) {
                     Some(mut peer_info) => {
                         if let Err(err) = peer_info
                             .sender
@@ -219,8 +214,7 @@ impl UdpActor {
                             self.local_private_key.clone(),
                             frame,
                             self.heartbeat_interval,
-                            &self.remote_public_keys,
-                            &self.connected_peers,
+                            &self.peer_store,
                         ) {
                             Err(err) => {
                                 error!(%err, "create encrypt actor failed");
@@ -240,17 +234,16 @@ impl UdpActor {
 
                                 debug!(%from, "send packet back done");
 
-                                self.connected_peers.add_peer_info(
-                                    cookie.clone(),
-                                    from,
-                                    mailbox_sender,
-                                );
-                                let connected_peers = self.connected_peers.clone();
+                                // make sure next packet can find encrypt actor
+                                self.peer_store
+                                    .add_peer_info(cookie.clone(), from, mailbox_sender);
+
+                                let peer_store = self.peer_store.clone();
 
                                 tokio::spawn(async move {
                                     let _ = encrypt_actor.run().await;
 
-                                    connected_peers.remove_peer(&cookie);
+                                    peer_store.remove_peer(&cookie);
                                 });
 
                                 Ok(())

@@ -5,23 +5,23 @@ use futures_channel::mpsc;
 use tokio::fs;
 
 use self::config::Config;
-use self::connected_peer::ConnectedPeers;
 use self::nat::NatActor;
+use self::peer_store::PeerStore;
 use self::tun::TunActor;
 use self::udp::UdpActor;
+use crate::public_key::PublicKey;
 
 mod config;
-mod connected_peer;
 mod encrypt;
 mod message;
 mod nat;
+mod peer_store;
 mod tun;
 mod udp;
 
 pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
     let config_data = fs::read(config).await?;
     let config = serde_yaml::from_slice::<Config>(&config_data)?;
-    let remote_public_keys = config.remote_public_keys();
 
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::spawn(conn);
@@ -29,12 +29,17 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
     let (tun_sender, tun_mailbox) = mpsc::channel(10);
     let (udp_sender, udp_mailbox) = mpsc::channel(10);
 
-    let connected_peers = ConnectedPeers::default();
+    let peer_store = PeerStore::from(config.peers.into_iter().map(|peer| {
+        (
+            PublicKey::from(peer.remote_public_key),
+            (peer.peer_ipv4, peer.peer_ipv6),
+        )
+    }));
 
     let mut tun_actor = TunActor::new(
         tun_sender.clone(),
         tun_mailbox,
-        connected_peers.clone(),
+        peer_store.clone(),
         config.local_ipv4,
         config.local_ipv6,
         config.tun_name,
@@ -45,12 +50,11 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
     let mut udp_actor = UdpActor::new(
         udp_sender,
         udp_mailbox,
-        connected_peers,
+        peer_store,
         tun_sender,
         config.listen_addr,
         config.local_private_key,
         config.heartbeat_interval,
-        remote_public_keys,
     )
     .await?;
 

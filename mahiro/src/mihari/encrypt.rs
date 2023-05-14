@@ -1,8 +1,7 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use dashmap::DashSet;
 use derivative::Derivative;
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
@@ -13,16 +12,13 @@ use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, warn};
 
-use super::connected_peer::ConnectedPeers;
 use super::message::EncryptMessage as Message;
 use super::message::{TunMessage, UdpMessage};
+use super::peer_store::PeerStore;
 use crate::cookie::COOKIE_LENGTH;
 use crate::encrypt::Encrypt;
-use crate::ip_packet;
-use crate::ip_packet::IpLocation;
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
-use crate::public_key::PublicKey;
 use crate::timestamp::generate_timestamp;
 use crate::{util, HEARTBEAT_DATA};
 
@@ -36,10 +32,7 @@ enum State {
         buffer: Vec<u8>,
         heartbeat_receive_instant: Instant,
         heartbeat_task: JoinHandle<()>,
-        saved_mahiro_ipv4: bool,
-        saved_mahiro_ipv6: bool,
-        saved_mahiro_link_local_ipv6: bool,
-        connected_peers: ConnectedPeers,
+        connected_peers: PeerStore,
         latest_timestamp: u64,
     },
 }
@@ -53,7 +46,6 @@ impl Drop for State {
 
 #[derive(Debug)]
 pub struct EncryptActor {
-    mailbox_sender: Sender<Message>,
     mailbox: Receiver<Message>,
     udp_sender: Sender<UdpMessage>,
     tun_sender: Sender<TunMessage>,
@@ -72,8 +64,7 @@ impl EncryptActor {
         local_private_key: Bytes,
         frame: Frame,
         heartbeat_interval: Duration,
-        remote_public_keys: &DashSet<PublicKey>,
-        connected_peers: &ConnectedPeers,
+        peer_store: &PeerStore,
     ) -> anyhow::Result<(Self, Frame)> {
         if frame.cookie.len() != COOKIE_LENGTH {
             error!("drop invalid length cookie frame");
@@ -95,11 +86,18 @@ impl EncryptActor {
                     .tap_err(|err| error!(%err, "create responder encrypt failed"))?;
 
                 let responder_handshake_success = encrypt.responder_handshake(&frame.data)?;
-                if !remote_public_keys.contains(responder_handshake_success.peer_public_key) {
-                    error!("unknown public key");
 
-                    return Err(anyhow::anyhow!("unknown public key"));
-                }
+                let (mahiro_ipv4, mahiro_ipv6) = match peer_store
+                    .get_mahiro_ip_by_public_key(responder_handshake_success.peer_public_key)
+                {
+                    None => {
+                        error!("unknown public key");
+
+                        return Err(anyhow::anyhow!("unknown public key"));
+                    }
+
+                    Some(ip) => ip,
+                };
 
                 if responder_handshake_success.payload.len() != 8 {
                     error!("invalid handshake timestamp payload");
@@ -125,9 +123,12 @@ impl EncryptActor {
                     tokio::spawn(Self::heartbeat(heartbeat_interval, mailbox_sender))
                 };
 
+                // make sure tun actor can find this encrypt actor
+                peer_store.add_mahiro_ip(mahiro_ipv4.into(), mailbox_sender.clone());
+                peer_store.add_mahiro_ip(mahiro_ipv6.into(), mailbox_sender);
+
                 Ok((
                     Self {
-                        mailbox_sender,
                         mailbox,
                         udp_sender,
                         tun_sender,
@@ -137,10 +138,7 @@ impl EncryptActor {
                             buffer: vec![0; 65535],
                             heartbeat_receive_instant: Instant::now(),
                             heartbeat_task,
-                            saved_mahiro_ipv4: false,
-                            saved_mahiro_ipv6: false,
-                            saved_mahiro_link_local_ipv6: false,
-                            connected_peers: connected_peers.clone(),
+                            connected_peers: peer_store.clone(),
                             latest_timestamp: timestamp,
                         },
                         heartbeat_interval,
@@ -189,9 +187,6 @@ impl EncryptActor {
                 encrypt,
                 buffer,
                 heartbeat_receive_instant,
-                saved_mahiro_ipv4,
-                saved_mahiro_ipv6,
-                saved_mahiro_link_local_ipv6,
                 connected_peers,
                 latest_timestamp,
                 ..
@@ -221,10 +216,6 @@ impl EncryptActor {
                         buffer,
                         encrypt,
                         heartbeat_receive_instant,
-                        saved_mahiro_ipv4,
-                        saved_mahiro_ipv6,
-                        saved_mahiro_link_local_ipv6,
-                        mailbox_sender: &self.mailbox_sender,
                         udp_sender: &mut self.udp_sender,
                         tun_sender: &mut self.tun_sender,
                         connected_peers,
@@ -298,10 +289,6 @@ impl EncryptActor {
             buffer,
             encrypt,
             heartbeat_receive_instant,
-            saved_mahiro_ipv4,
-            saved_mahiro_ipv6,
-            saved_mahiro_link_local_ipv6,
-            mailbox_sender,
             udp_sender,
             tun_sender,
             connected_peers,
@@ -381,50 +368,6 @@ impl EncryptActor {
                     }
 
                     Some(DataOrHeartbeat::Data(data)) => {
-                        if !*saved_mahiro_ipv4
-                            || !*saved_mahiro_ipv6
-                            || !*saved_mahiro_link_local_ipv6
-                        {
-                            let mahiro_ip = match ip_packet::get_packet_ip(data, IpLocation::Src) {
-                                None => {
-                                    error!("packet has no ip, drop it");
-
-                                    return Ok(());
-                                }
-
-                                Some(mahiro_addr) => mahiro_addr,
-                            };
-
-                            debug!(%mahiro_ip, "get mahiro ip done");
-
-                            match mahiro_ip {
-                                IpAddr::V4(_) => {
-                                    if !*saved_mahiro_ipv4 {
-                                        connected_peers
-                                            .add_mahiro_ip(mahiro_ip, mailbox_sender.clone());
-
-                                        *saved_mahiro_ipv4 = true;
-                                    }
-                                }
-                                IpAddr::V6(ip) => {
-                                    if ip.is_unicast_link_local() && !*saved_mahiro_link_local_ipv6
-                                    {
-                                        connected_peers
-                                            .add_mahiro_ip(mahiro_ip, mailbox_sender.clone());
-
-                                        *saved_mahiro_link_local_ipv6 = true;
-                                    }
-
-                                    if !ip.is_unicast_link_local() && !*saved_mahiro_ipv6 {
-                                        connected_peers
-                                            .add_mahiro_ip(mahiro_ip, mailbox_sender.clone());
-
-                                        *saved_mahiro_ipv6 = true;
-                                    }
-                                }
-                            }
-                        }
-
                         tun_sender
                             .send(TunMessage::ToTun(data.clone()))
                             .await
@@ -489,18 +432,14 @@ struct HandleHandshakeFrameArgs<'a> {
     buffer: &'a mut [u8],
     encrypt: &'a Encrypt,
     heartbeat_receive_instant: &'a mut Instant,
-    saved_mahiro_ipv4: &'a mut bool,
-    saved_mahiro_ipv6: &'a mut bool,
-    saved_mahiro_link_local_ipv6: &'a mut bool,
-    mailbox_sender: &'a Sender<Message>,
     udp_sender: &'a mut Sender<UdpMessage>,
     tun_sender: &'a mut Sender<TunMessage>,
-    connected_peers: &'a ConnectedPeers,
+    connected_peers: &'a PeerStore,
     latest_timestamp: &'a mut u64,
 }
 
 fn get_peer_addr_by_cookie(
-    connected_peers: &ConnectedPeers,
+    connected_peers: &PeerStore,
     cookie: &Bytes,
 ) -> anyhow::Result<SocketAddr> {
     match connected_peers.get_peer_info_by_cookie(cookie) {
@@ -518,6 +457,9 @@ fn get_peer_addr_by_cookie(
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::str::FromStr;
+
     use futures_channel::mpsc;
     use test_log::test;
 
@@ -534,9 +476,6 @@ mod tests {
         let (udp_sender, mut udp_mailbox) = mpsc::channel(10);
         let (mut mailbox_sender, mailbox) = mpsc::channel(10);
 
-        let set = DashSet::new();
-        set.insert(PublicKey::from(Bytes::from(initiator_keypair.public)));
-
         let cookie = generate_cookie();
         let timestamp = generate_timestamp().to_be_bytes();
         let initiator_handshake = initiator_encrypt.initiator_handshake(&timestamp).unwrap();
@@ -547,9 +486,11 @@ mod tests {
             data: initiator_handshake.to_vec().into(),
         };
 
-        let connected_peers = ConnectedPeers::default();
+        let ipv4 = Ipv4Addr::new(192, 168, 1, 1);
+        let ipv6 = Ipv6Addr::from_str("fc00:100::1").unwrap();
+        let peer_store = PeerStore::from([(initiator_keypair.public.into(), (ipv4, ipv6))]);
         let from = "127.0.0.1:8888".parse().unwrap();
-        connected_peers.add_peer_info(cookie.clone(), from, mailbox_sender.clone());
+        peer_store.add_peer_info(cookie.clone(), from, mailbox_sender.clone());
         let (mut encrypt_actor, frame) = EncryptActor::new(
             mailbox_sender.clone(),
             mailbox,
@@ -558,8 +499,7 @@ mod tests {
             responder_keypair.private.into(),
             frame,
             Duration::from_secs(10),
-            &set,
-            &connected_peers,
+            &peer_store,
         )
         .unwrap();
 
@@ -626,5 +566,8 @@ mod tests {
                 panic!("invalid udp message");
             }
         }
+
+        peer_store.get_sender_by_mahiro_ip(ipv4.into()).unwrap();
+        peer_store.get_sender_by_mahiro_ip(ipv6.into()).unwrap();
     }
 }
