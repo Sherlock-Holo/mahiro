@@ -7,6 +7,7 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
 
+/// a base64 debug output Bytes
 #[derive(Clone)]
 pub struct PublicKey(Bytes);
 
