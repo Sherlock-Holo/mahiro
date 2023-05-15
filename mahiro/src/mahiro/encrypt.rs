@@ -21,6 +21,8 @@ use crate::public_key::PublicKey;
 use crate::timestamp::generate_timestamp;
 use crate::{util, HEARTBEAT_DATA};
 
+type Cookie = PublicKey;
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 enum State {
@@ -29,12 +31,12 @@ enum State {
     },
 
     Handshake {
-        cookie: Bytes,
+        cookie: Cookie,
         encrypt: Option<Encrypt>,
     },
 
     Transport {
-        cookie: Bytes,
+        cookie: Cookie,
         encrypt: Encrypt,
         #[derivative(Debug = "ignore")]
         buffer: Vec<u8>,
@@ -305,7 +307,7 @@ impl EncryptActor {
         });
 
         Ok(Some(State::Handshake {
-            cookie,
+            cookie: cookie.into(),
             encrypt: Some(encrypt),
         }))
     }
@@ -352,7 +354,7 @@ impl EncryptActor {
             tokio::spawn(async move { Self::heartbeat(heartbeat_interval, mailbox_sender).await });
 
         Ok(Some(State::Transport {
-            cookie: cookie.clone(),
+            cookie: cookie.clone().into(),
             encrypt,
             buffer: vec![0; 65535],
             heartbeat_receive_instant: Instant::now(),
