@@ -7,6 +7,7 @@ use std::task::{Context, Poll};
 use cidr::{Ipv4Inet, Ipv6Inet};
 use derivative::Derivative;
 use futures_util::TryStreamExt;
+use netlink_packet_route::nlas::link::Nla;
 use rtnetlink::Handle;
 use tap::TapFallible;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -82,10 +83,13 @@ impl Tun {
 
         info!("add ipv4 and ipv6 addr done");
 
-        link_handle
-            .set(tun_index)
-            .mtu(MTU)
-            .up()
+        let mut link_set_request = link_handle.set(tun_index).mtu(MTU).up();
+        link_set_request
+            .message_mut()
+            .nlas
+            .push(Nla::TxQueueLen(1000));
+
+        link_set_request
             .execute()
             .await
             .tap_err(|err| error!(%err, MTU, "set tun MTU and up failed"))?;

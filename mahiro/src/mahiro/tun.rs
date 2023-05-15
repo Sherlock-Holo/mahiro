@@ -193,10 +193,6 @@ impl TunActor {
             }
 
             Message::ToTun(packet) => {
-                /*self.tun
-                .write(&packet)
-                .await
-                .tap_err(|err| error!(%err, "write packet to tun failed"))?;*/
                 match Pin::new(&mut self.tun)
                     .poll_write(&mut Context::from_waker(noop_waker_ref()), &packet)
                 {
