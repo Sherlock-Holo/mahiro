@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use derivative::Derivative;
 use futures_channel::mpsc;
 use futures_channel::mpsc::{Receiver, Sender};
@@ -95,9 +95,9 @@ impl UdpActor {
     }
 
     async fn read_from_udp(udp_socket: Arc<UdpSocket>, mut sender: Sender<Message>) {
-        let mut buf = BytesMut::with_capacity(4096);
+        let mut buf = BytesMut::with_capacity(1500 * 4);
         loop {
-            buf.clear();
+            buf.reserve(1500);
 
             let (packet, from) = match udp_socket.recv_buf_from(&mut buf).await {
                 Err(err) => {
@@ -108,7 +108,7 @@ impl UdpActor {
                     return;
                 }
 
-                Ok((n, from)) => (buf.copy_to_bytes(n), from),
+                Ok((_, from)) => (buf.split().freeze(), from),
             };
 
             if let Err(err) = sender.send(Message::Packet(Ok((packet, from)))).await {

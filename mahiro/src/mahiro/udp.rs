@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
@@ -83,9 +83,9 @@ impl UdpActor {
     }
 
     async fn read_from_udp(udp_socket: Arc<UdpSocket>, mut sender: Sender<Message>) {
-        let mut buf = BytesMut::with_capacity(4096);
+        let mut buf = BytesMut::with_capacity(1500 * 4);
         loop {
-            buf.clear();
+            buf.reserve(1500);
 
             let packet = match udp_socket.recv_buf(&mut buf).await {
                 Err(err) => {
@@ -96,7 +96,7 @@ impl UdpActor {
                     return;
                 }
 
-                Ok(n) => buf.copy_to_bytes(n),
+                Ok(_) => buf.split().freeze(),
             };
 
             if let Err(err) = sender.send(Message::Packet(Ok(packet))).await {
