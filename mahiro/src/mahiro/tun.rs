@@ -1,13 +1,17 @@
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use bytes::BytesMut;
 use cidr::{Ipv4Inet, Ipv6Inet};
 use futures_channel::mpsc::{Receiver, Sender};
+use futures_util::task::noop_waker_ref;
 use futures_util::{SinkExt, StreamExt};
 use rtnetlink::Handle;
 use tap::TapFallible;
 use tokio::io;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use super::message::TunMessage as Message;
 use crate::ip_packet;
@@ -189,14 +193,27 @@ impl TunActor {
             }
 
             Message::ToTun(packet) => {
-                self.tun
-                    .write(&packet)
-                    .await
-                    .tap_err(|err| error!(%err, "write packet to tun failed"))?;
+                /*self.tun
+                .write(&packet)
+                .await
+                .tap_err(|err| error!(%err, "write packet to tun failed"))?;*/
+                match Pin::new(&mut self.tun)
+                    .poll_write(&mut Context::from_waker(noop_waker_ref()), &packet)
+                {
+                    Poll::Pending => {
+                        warn!("tun queue is full, drop packet");
 
-                debug!("write packet to tun done");
+                        Ok(())
+                    }
 
-                Ok(())
+                    Poll::Ready(result) => {
+                        result.tap_err(|err| error!(%err, "write packet to tun failed"))?;
+
+                        debug!("write packet to tun done");
+
+                        Ok(())
+                    }
+                }
             }
         }
     }

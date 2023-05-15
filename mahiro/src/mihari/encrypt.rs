@@ -404,10 +404,20 @@ impl EncryptActor {
                             }
                         }
 
-                        tun_sender
-                            .send(TunMessage::ToTun(data.clone()))
-                            .await
-                            .tap_err(|err| error!(%err, "send packet failed"))?;
+                        /*tun_sender
+                        .try_send(TunMessage::ToTun(data.clone()))
+                        .tap_err(|err| error!(%err, "send packet failed"))?;*/
+                        if let Err(err) = tun_sender.try_send(TunMessage::ToTun(data.clone())) {
+                            if err.is_full() {
+                                warn!("tun mailbox is full, drop packet");
+
+                                return Ok(());
+                            }
+
+                            error!("send packet failed");
+
+                            return Err(anyhow::anyhow!("send packet failed"));
+                        }
                     }
                 }
 
