@@ -1,4 +1,4 @@
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use cidr::{Ipv4Inet, Ipv6Inet};
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::{SinkExt, StreamExt};
@@ -93,9 +93,9 @@ impl TunActor {
     }
 
     async fn read_from_tun(mut tun_read: ReadHalf<Tun>, mut sender: Sender<Message>) {
-        let mut buf = BytesMut::with_capacity(4096);
+        let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
-            buf.clear();
+            buf.reserve(1500);
 
             let packet = match tun_read.read_buf(&mut buf).await {
                 Err(err) => {
@@ -106,7 +106,7 @@ impl TunActor {
                     return;
                 }
 
-                Ok(n) => buf.copy_to_bytes(n),
+                Ok(_) => buf.split().freeze(),
             };
 
             if let Err(err) = sender.send(Message::FromTun(Ok(packet))).await {
