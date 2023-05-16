@@ -6,10 +6,11 @@ use cidr::{Ipv4Inet, Ipv6Inet};
 use futures_channel::mpsc::{Receiver, Sender};
 use futures_util::task::noop_waker_ref;
 use futures_util::{SinkExt, StreamExt};
+use rand::prelude::SliceRandom;
+use rand::thread_rng;
 use rtnetlink::Handle;
 use tap::TapFallible;
-use tokio::io;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
@@ -17,7 +18,7 @@ use super::message::TunMessage as Message;
 use crate::ip_packet;
 use crate::ip_packet::IpLocation;
 use crate::mahiro::message::EncryptMessage;
-use crate::tun::Tun;
+use crate::tun::{Tun, TunReader, TunWriter};
 
 #[derive(Debug)]
 pub struct TunConfig {
@@ -35,8 +36,8 @@ pub struct TunActor {
 
     tun_config: TunConfig,
 
-    tun: WriteHalf<Tun>,
-    read_task: JoinHandle<()>,
+    tun_writers: Vec<TunWriter>,
+    read_tasks: Vec<JoinHandle<()>>,
 }
 
 impl TunActor {
@@ -46,22 +47,22 @@ impl TunActor {
         mailbox: Receiver<Message>,
         tun_config: TunConfig,
     ) -> anyhow::Result<Self> {
-        let (tun, read_task) = Self::start(mailbox_sender.clone(), &tun_config).await?;
+        let (tun_writers, read_tasks) = Self::start(mailbox_sender.clone(), &tun_config).await?;
 
         Ok(Self {
             mailbox_sender,
             mailbox,
             encrypt_sender,
             tun_config,
-            tun,
-            read_task,
+            tun_writers,
+            read_tasks,
         })
     }
 
     async fn start(
         mailbox_sender: Sender<Message>,
         tun_config: &TunConfig,
-    ) -> anyhow::Result<(WriteHalf<Tun>, JoinHandle<()>)> {
+    ) -> anyhow::Result<(Vec<TunWriter>, Vec<JoinHandle<()>>)> {
         let tun = Tun::new(
             tun_config.tun_name.clone(),
             tun_config.tun_ipv4,
@@ -73,35 +74,43 @@ impl TunActor {
 
         info!(?tun, "create tun done");
 
-        let (tun_read, tun_write) = io::split(tun);
+        let (tun_readers, tun_writers) = tun.split_queues();
 
-        let read_task =
-            tokio::spawn(async move { Self::read_from_tun(tun_read, mailbox_sender).await });
+        let read_tasks = tun_readers
+            .into_iter()
+            .map(|tun_reader| {
+                let mailbox_sender = mailbox_sender.clone();
 
-        Ok((tun_write, read_task))
+                tokio::spawn(Self::read_from_tun(tun_reader, mailbox_sender))
+            })
+            .collect();
+
+        Ok((tun_writers, read_tasks))
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
-        self.read_task.abort();
-        self.tun
-            .shutdown()
-            .await
-            .tap_err(|err| error!(%err, "shutdown tun failed"))?;
+        self.read_tasks.iter().for_each(|task| task.abort());
+        for mut tun_writer in self.tun_writers.drain(..) {
+            if let Err(err) = tun_writer.shutdown().await {
+                error!(%err, "shutdown tun failed");
+            }
+        }
 
-        let (tun, read_task) = Self::start(self.mailbox_sender.clone(), &self.tun_config).await?;
+        let (tun_writers, read_tasks) =
+            Self::start(self.mailbox_sender.clone(), &self.tun_config).await?;
 
-        self.tun = tun;
-        self.read_task = read_task;
+        self.tun_writers = tun_writers;
+        self.read_tasks = read_tasks;
 
         Ok(())
     }
 
-    async fn read_from_tun(mut tun_read: ReadHalf<Tun>, mut sender: Sender<Message>) {
+    async fn read_from_tun(mut tun_reader: TunReader, mut sender: Sender<Message>) {
         let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
             buf.reserve(1500);
 
-            let packet = match tun_read.read_buf(&mut buf).await {
+            let packet = match tun_reader.read_buf(&mut buf).await {
                 Err(err) => {
                     error!(%err, "receive tun packet failed");
 
@@ -193,7 +202,9 @@ impl TunActor {
             }
 
             Message::ToTun(packet) => {
-                match Pin::new(&mut self.tun)
+                let tun_writers = self.tun_writers.choose_mut(&mut thread_rng()).unwrap();
+
+                match Pin::new(tun_writers)
                     .poll_write(&mut Context::from_waker(noop_waker_ref()), &packet)
                 {
                     Poll::Pending => {
