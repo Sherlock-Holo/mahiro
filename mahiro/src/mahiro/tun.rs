@@ -3,9 +3,10 @@ use std::task::{Context, Poll};
 
 use bytes::BytesMut;
 use cidr::{Ipv4Inet, Ipv6Inet};
-use futures_channel::mpsc::{Receiver, Sender};
+use derivative::Derivative;
+use flume::{Sender, TrySendError};
 use futures_util::task::noop_waker_ref;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
 use rtnetlink::Handle;
@@ -19,6 +20,7 @@ use crate::ip_packet;
 use crate::ip_packet::IpLocation;
 use crate::mahiro::message::EncryptMessage;
 use crate::tun::{Tun, TunReader, TunWriter};
+use crate::util::Receiver;
 
 #[derive(Debug)]
 pub struct TunConfig {
@@ -28,9 +30,11 @@ pub struct TunConfig {
     pub netlink_handle: Handle,
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct TunActor {
     mailbox_sender: Sender<Message>,
+    #[derivative(Debug = "ignore")]
     mailbox: Receiver<Message>,
     encrypt_sender: Sender<EncryptMessage>,
 
@@ -105,7 +109,7 @@ impl TunActor {
         Ok(())
     }
 
-    async fn read_from_tun(mut tun_reader: TunReader, mut sender: Sender<Message>) {
+    async fn read_from_tun(mut tun_reader: TunReader, sender: Sender<Message>) {
         let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
             buf.reserve(1500);
@@ -114,7 +118,7 @@ impl TunActor {
                 Err(err) => {
                     error!(%err, "receive tun packet failed");
 
-                    let _ = sender.send(Message::FromTun(Err(err))).await;
+                    let _ = sender.try_send(Message::FromTun(Err(err)));
 
                     return;
                 }
@@ -122,10 +126,18 @@ impl TunActor {
                 Ok(_) => buf.split().freeze(),
             };
 
-            if let Err(err) = sender.send(Message::FromTun(Ok(packet))).await {
-                error!(%err, "send tun packet failed");
+            match sender.try_send(Message::FromTun(Ok(packet))) {
+                Err(TrySendError::Full(_)) => {
+                    warn!("tun actor mailbox full");
+                }
 
-                return;
+                Err(err) => {
+                    error!(%err, "send tun packet failed");
+
+                    return;
+                }
+
+                Ok(_) => {}
             }
         }
     }
@@ -191,14 +203,25 @@ impl TunActor {
                     Some(ip) => ip,
                 };
 
-                self.encrypt_sender
-                    .send(EncryptMessage::Packet(packet))
-                    .await
-                    .tap_err(|err| error!(%err, "send packet to encrypt failed"))?;
+                match self.encrypt_sender.try_send(EncryptMessage::Packet(packet)) {
+                    Err(TrySendError::Full(_)) => {
+                        warn!("encrypt actor mailbox is full");
 
-                debug!(%src_ip, %dst_ip, "send packet to encrypt done");
+                        Ok(())
+                    }
 
-                Ok(())
+                    Err(err) => {
+                        error!(%err, "send packet to encrypt failed");
+
+                        Err(err.into())
+                    }
+
+                    Ok(_) => {
+                        debug!(%src_ip, %dst_ip, "send packet to encrypt done");
+
+                        Ok(())
+                    }
+                }
             }
 
             Message::ToTun(packet) => {
@@ -232,7 +255,6 @@ mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
-    use futures_channel::mpsc;
     use network_types::ip::{IpProto, Ipv4Hdr};
     use network_types::udp::UdpHdr;
     use nix::unistd::getuid;
@@ -260,14 +282,20 @@ mod tests {
             netlink_handle: handle,
         };
 
-        let (mailbox_sender, mailbox) = mpsc::channel(10);
-        let (encrypt_sender, mut encrypt_mailbox) = mpsc::channel(10);
-        let mut tun_actor =
-            TunActor::new(encrypt_sender, mailbox_sender.clone(), mailbox, tun_config)
-                .await
-                .unwrap();
+        let (mailbox_sender, mailbox) = flume::bounded(10);
+        let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
+        let mut tun_actor = TunActor::new(
+            encrypt_sender,
+            mailbox_sender.clone(),
+            mailbox.into_stream(),
+            tun_config,
+        )
+        .await
+        .unwrap();
 
         tokio::spawn(async move { tun_actor.run().await });
+
+        let mut encrypt_mailbox = encrypt_mailbox.into_stream();
 
         let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
         udp_socket.connect("192.168.1.2:8888").await.unwrap();

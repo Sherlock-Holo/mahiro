@@ -4,25 +4,27 @@ use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use derivative::Derivative;
-use futures_channel::mpsc;
-use futures_channel::mpsc::{Receiver, Sender};
-use futures_util::{SinkExt, StreamExt};
+use flume::{Sender, TrySendError};
+use futures_util::StreamExt;
 use prost::Message as _;
 use tap::TapFallible;
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument};
+use tracing_log::log::warn;
 
 use super::encrypt::EncryptActor;
 use super::message::UdpMessage as Message;
 use super::message::{EncryptMessage, TunMessage};
 use super::peer_store::PeerStore;
 use crate::protocol::Frame;
+use crate::util::Receiver;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct UdpActor {
     mailbox_sender: Sender<Message>,
+    #[derivative(Debug = "ignore")]
     mailbox: Receiver<Message>,
     peer_store: PeerStore,
     tun_sender: Sender<TunMessage>,
@@ -94,7 +96,7 @@ impl UdpActor {
         Ok(())
     }
 
-    async fn read_from_udp(udp_socket: Arc<UdpSocket>, mut sender: Sender<Message>) {
+    async fn read_from_udp(udp_socket: Arc<UdpSocket>, sender: Sender<Message>) {
         let mut buf = BytesMut::with_capacity(1500 * 4);
         loop {
             buf.reserve(1500);
@@ -103,7 +105,7 @@ impl UdpActor {
                 Err(err) => {
                     error!(%err, "receive udp socket failed");
 
-                    let _ = sender.send(Message::Packet(Err(err))).await;
+                    let _ = sender.try_send(Message::Packet(Err(err)));
 
                     return;
                 }
@@ -111,10 +113,18 @@ impl UdpActor {
                 Ok((_, from)) => (buf.split().freeze(), from),
             };
 
-            if let Err(err) = sender.send(Message::Packet(Ok((packet, from)))).await {
-                error!(%err, "send packet failed");
+            match sender.try_send(Message::Packet(Ok((packet, from)))) {
+                Err(TrySendError::Full(_)) => {
+                    warn!("udp actor mailbox is full");
+                }
 
-                return;
+                Err(err) => {
+                    error!(%err, "send packet failed");
+
+                    return;
+                }
+
+                Ok(_) => {}
             }
         }
     }
@@ -187,15 +197,22 @@ impl UdpActor {
                 debug!("decode packet done");
 
                 match self.peer_store.get_peer_info_by_cookie(&frame.cookie) {
-                    Some(mut peer_info) => {
-                        if let Err(err) = peer_info
+                    Some(peer_info) => {
+                        match peer_info
                             .sender
-                            .send(EncryptMessage::Frame { frame, from })
-                            .await
+                            .try_send(EncryptMessage::Frame { frame, from })
                         {
-                            error!(%err, "send frame to encrypt actor failed");
+                            Err(TrySendError::Full(_)) => {
+                                warn!("encrypt actor mailbox full");
+                            }
 
-                            return Err(err.into());
+                            Err(err) => {
+                                error!(%err, "send frame to encrypt actor failed");
+
+                                return Err(err.into());
+                            }
+
+                            Ok(_) => {}
                         }
 
                         debug!(%from, "send frame to encrypt actor done");
@@ -205,10 +222,10 @@ impl UdpActor {
 
                     None => {
                         let cookie = frame.cookie.clone();
-                        let (mailbox_sender, mailbox) = mpsc::channel(10);
+                        let (mailbox_sender, mailbox) = flume::bounded(10);
                         match EncryptActor::new(
                             mailbox_sender.clone(),
-                            mailbox,
+                            mailbox.into_stream(),
                             self.mailbox_sender.clone(),
                             self.tun_sender.clone(),
                             self.local_private_key.clone(),

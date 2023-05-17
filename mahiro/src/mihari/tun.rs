@@ -4,9 +4,10 @@ use std::task::{Context, Poll};
 
 use bytes::BytesMut;
 use cidr::{Ipv4Inet, Ipv6Inet};
-use futures_channel::mpsc::{Receiver, Sender};
+use derivative::Derivative;
+use flume::{Sender, TrySendError};
 use futures_util::task::noop_waker_ref;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
 use rtnetlink::Handle;
@@ -21,10 +22,13 @@ use super::peer_store::PeerStore;
 use crate::ip_packet;
 use crate::ip_packet::IpLocation;
 use crate::tun::{Tun, TunReader, TunWriter};
+use crate::util::Receiver;
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct TunActor {
     mailbox_sender: Sender<Message>,
+    #[derivative(Debug = "ignore")]
     mailbox: Receiver<Message>,
     peer_store: PeerStore,
 
@@ -120,7 +124,7 @@ impl TunActor {
         Ok(())
     }
 
-    async fn read_from_tun(mut tun_reader: TunReader, mut sender: Sender<Message>) {
+    async fn read_from_tun(mut tun_reader: TunReader, sender: Sender<Message>) {
         let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
             buf.reserve(1500);
@@ -129,7 +133,7 @@ impl TunActor {
                 Err(err) => {
                     error!(%err, "receive tun packet failed");
 
-                    let _ = sender.send(Message::FromTun(Err(err))).await;
+                    let _ = sender.try_send(Message::FromTun(Err(err)));
 
                     return;
                 }
@@ -137,10 +141,18 @@ impl TunActor {
                 Ok(_) => buf.split().freeze(),
             };
 
-            if let Err(err) = sender.send(Message::FromTun(Ok(packet))).await {
-                error!(%err, "send tun packet failed");
+            match sender.try_send(Message::FromTun(Ok(packet))) {
+                Err(TrySendError::Full(_)) => {
+                    warn!("tun actor mailbox full");
+                }
 
-                return;
+                Err(err) => {
+                    error!(%err, "send tun packet failed");
+
+                    return;
+                }
+
+                Ok(_) => {}
             }
         }
     }
@@ -246,7 +258,7 @@ impl TunActor {
                             }
                         }
 
-                        let mut sender = match self.peer_store.get_sender_by_mahiro_ip(ip) {
+                        let sender = match self.peer_store.get_sender_by_mahiro_ip(ip) {
                             None => {
                                 debug!(%ip, "ip doesn't in connected peers, maybe peer is disconnected, drop it");
 
@@ -256,8 +268,16 @@ impl TunActor {
                             Some(sender) => sender,
                         };
 
-                        if let Err(err) = sender.send(EncryptMessage::Packet(packet)).await {
-                            error!(%err, %ip, "send tun packet to encrypt actor failed");
+                        match sender.try_send(EncryptMessage::Packet(packet)) {
+                            Err(TrySendError::Full(_)) => {
+                                warn!("encrypt actor mailbox is full");
+                            }
+
+                            Err(err) => {
+                                error!(%err, %ip, "send tun packet to encrypt actor failed");
+                            }
+
+                            Ok(_) => {}
                         }
 
                         Ok(())

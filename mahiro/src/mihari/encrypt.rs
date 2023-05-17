@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use derivative::Derivative;
-use futures_channel::mpsc::{Receiver, Sender};
-use futures_util::{SinkExt, StreamExt};
+use flume::{Sender, TrySendError};
+use futures_util::StreamExt;
 use prost::Message as _;
 use tap::TapFallible;
 use tokio::task::JoinHandle;
@@ -22,6 +22,7 @@ use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::public_key::PublicKey;
 use crate::timestamp::generate_timestamp;
+use crate::util::Receiver;
 use crate::{util, HEARTBEAT_DATA};
 
 type Cookie = PublicKey;
@@ -49,9 +50,11 @@ impl Drop for State {
     }
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct EncryptActor {
     mailbox_sender: Sender<Message>,
+    #[derivative(Debug = "ignore")]
     mailbox: Receiver<Message>,
     udp_sender: Sender<UdpMessage>,
     tun_sender: Sender<TunMessage>,
@@ -163,7 +166,7 @@ impl EncryptActor {
         }
     }
 
-    async fn heartbeat(heartbeat_interval: Duration, mut mailbox_sender: Sender<Message>) {
+    async fn heartbeat(heartbeat_interval: Duration, mailbox_sender: Sender<Message>) {
         let mut interval_stream = IntervalStream::new(time::interval(heartbeat_interval));
         interval_stream
             .next()
@@ -171,7 +174,9 @@ impl EncryptActor {
             .expect("unexpect interval stream stopped");
 
         while interval_stream.next().await.is_some() {
-            if let Err(err) = mailbox_sender.send(Message::Heartbeat).await {
+            if let Err(err @ TrySendError::Disconnected(_)) =
+                mailbox_sender.try_send(Message::Heartbeat)
+            {
                 error!(%err, "send heartbeat message failed");
             }
         }
@@ -285,12 +290,21 @@ impl EncryptActor {
             data,
         };
 
-        udp_sender
-            .send(UdpMessage::Frame { frame, to })
-            .await
-            .tap_err(|err| error!(%err, "send frame failed"))?;
+        match udp_sender.try_send(UdpMessage::Frame { frame, to }) {
+            Err(TrySendError::Full(_)) => {
+                warn!("udp actor mailbox full");
 
-        Ok(())
+                Ok(())
+            }
+
+            Err(err) => {
+                error!(%err, "send frame failed");
+
+                Err(err.into())
+            }
+
+            Ok(_) => Ok(()),
+        }
     }
 
     async fn handle_handshake_frame(
@@ -373,10 +387,19 @@ impl EncryptActor {
                                 data: pong_data,
                             };
 
-                            udp_sender
-                                .send(UdpMessage::Frame { frame, to: from })
-                                .await
-                                .tap_err(|err| error!(%err, "send pong frame failed"))?;
+                            match udp_sender.try_send(UdpMessage::Frame { frame, to: from }) {
+                                Err(TrySendError::Full(_)) => {
+                                    warn!("udp actor mailbox full");
+                                }
+
+                                Err(err) => {
+                                    error!(%err, "send pong frame failed");
+
+                                    return Err(err.into());
+                                }
+
+                                Ok(_) => {}
+                            }
                         }
                     }
 
@@ -404,19 +427,20 @@ impl EncryptActor {
                             }
                         }
 
-                        /*tun_sender
-                        .try_send(TunMessage::ToTun(data.clone()))
-                        .tap_err(|err| error!(%err, "send packet failed"))?;*/
-                        if let Err(err) = tun_sender.try_send(TunMessage::ToTun(data.clone())) {
-                            if err.is_full() {
+                        match tun_sender.try_send(TunMessage::ToTun(data.clone())) {
+                            Err(TrySendError::Full(_)) => {
                                 warn!("tun mailbox is full, drop packet");
 
                                 return Ok(());
                             }
 
-                            error!("send packet failed");
+                            Err(err) => {
+                                error!(%err, "send packet failed");
 
-                            return Err(anyhow::anyhow!("send packet failed"));
+                                return Err(err.into());
+                            }
+
+                            Ok(_) => {}
                         }
                     }
                 }
@@ -463,12 +487,21 @@ impl EncryptActor {
             data: Bytes::copy_from_slice(&buffer[..n]),
         };
 
-        udp_sender
-            .send(UdpMessage::Frame { frame, to })
-            .await
-            .tap_err(|err| error!(%err, "send udp heartbeat frame failed"))?;
+        match udp_sender.try_send(UdpMessage::Frame { frame, to }) {
+            Err(TrySendError::Full(_)) => {
+                warn!("udp actor mailbox full");
 
-        Ok(())
+                Ok(())
+            }
+
+            Err(err) => {
+                error!(%err, "send udp heartbeat frame failed");
+
+                Err(err.into())
+            }
+
+            Ok(_) => Ok(()),
+        }
     }
 }
 
@@ -508,7 +541,7 @@ mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
-    use futures_channel::mpsc;
+    use futures_util::SinkExt;
     use test_log::test;
 
     use super::*;
@@ -520,9 +553,9 @@ mod tests {
         let responder_keypair = Encrypt::generate_keypair().unwrap();
         let mut initiator_encrypt =
             Encrypt::new_initiator(&initiator_keypair.private, &responder_keypair.public).unwrap();
-        let (tun_sender, mut tun_mailbox) = mpsc::channel(10);
-        let (udp_sender, mut udp_mailbox) = mpsc::channel(10);
-        let (mut mailbox_sender, mailbox) = mpsc::channel(10);
+        let (tun_sender, mut tun_mailbox) = flume::bounded(10);
+        let (udp_sender, mut udp_mailbox) = flume::bounded(10);
+        let (mut mailbox_sender, mailbox) = flume::bounded(10);
 
         let cookie = generate_cookie();
         let timestamp = generate_timestamp().to_be_bytes();
@@ -541,7 +574,7 @@ mod tests {
         peer_store.add_peer_info(cookie.clone(), from, mailbox_sender.clone());
         let (mut encrypt_actor, frame) = EncryptActor::new(
             mailbox_sender.clone(),
-            mailbox,
+            mailbox.into_stream(),
             udp_sender,
             tun_sender,
             responder_keypair.private.into(),
@@ -560,6 +593,10 @@ mod tests {
         initiator_encrypt = initiator_encrypt.into_transport_mode().unwrap();
 
         tokio::spawn(async move { encrypt_actor.run().await });
+
+        let mut tun_mailbox = tun_mailbox.into_stream();
+        let mut udp_mailbox = udp_mailbox.into_stream();
+        let mut mailbox_sender = mailbox_sender.into_sink();
 
         let data = FrameData {
             timestamp: generate_timestamp(),
