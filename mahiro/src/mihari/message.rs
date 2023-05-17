@@ -17,6 +17,5 @@ pub enum UdpMessage {
 }
 
 pub enum TunMessage {
-    FromTun(io::Result<Bytes>),
     ToTun(Bytes),
 }
