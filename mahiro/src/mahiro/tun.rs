@@ -7,12 +7,10 @@ use derivative::Derivative;
 use flume::{Sender, TrySendError};
 use futures_util::task::noop_waker_ref;
 use futures_util::StreamExt;
-use rand::prelude::SliceRandom;
-use rand::thread_rng;
 use rtnetlink::Handle;
 use tap::TapFallible;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::task::JoinHandle;
+use tokio::io::{AsyncReadExt, AsyncWrite};
+use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 use super::message::TunMessage as Message;
@@ -41,7 +39,7 @@ pub struct TunActor {
     tun_config: TunConfig,
 
     tun_writers: Vec<TunWriter>,
-    read_tasks: Vec<JoinHandle<()>>,
+    tun_readers: Vec<TunReader>,
 }
 
 impl TunActor {
@@ -51,7 +49,7 @@ impl TunActor {
         mailbox: Receiver<Message>,
         tun_config: TunConfig,
     ) -> anyhow::Result<Self> {
-        let (tun_writers, read_tasks) = Self::start(mailbox_sender.clone(), &tun_config).await?;
+        let (tun_writers, tun_readers) = Self::start(&tun_config).await?;
 
         Ok(Self {
             mailbox_sender,
@@ -59,14 +57,11 @@ impl TunActor {
             encrypt_sender,
             tun_config,
             tun_writers,
-            read_tasks,
+            tun_readers,
         })
     }
 
-    async fn start(
-        mailbox_sender: Sender<Message>,
-        tun_config: &TunConfig,
-    ) -> anyhow::Result<(Vec<TunWriter>, Vec<JoinHandle<()>>)> {
+    async fn start(tun_config: &TunConfig) -> anyhow::Result<(Vec<TunWriter>, Vec<TunReader>)> {
         let tun = Tun::new(
             tun_config.tun_name.clone(),
             tun_config.tun_ipv4,
@@ -80,36 +75,22 @@ impl TunActor {
 
         let (tun_readers, tun_writers) = tun.split_queues();
 
-        let read_tasks = tun_readers
-            .into_iter()
-            .map(|tun_reader| {
-                let mailbox_sender = mailbox_sender.clone();
-
-                tokio::spawn(Self::read_from_tun(tun_reader, mailbox_sender))
-            })
-            .collect();
-
-        Ok((tun_writers, read_tasks))
+        Ok((tun_writers, tun_readers))
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
-        self.read_tasks.iter().for_each(|task| task.abort());
-        for mut tun_writer in self.tun_writers.drain(..) {
-            if let Err(err) = tun_writer.shutdown().await {
-                error!(%err, "shutdown tun failed");
-            }
-        }
-
-        let (tun_writers, read_tasks) =
-            Self::start(self.mailbox_sender.clone(), &self.tun_config).await?;
+        let (tun_writers, tun_readers) = Self::start(&self.tun_config).await?;
 
         self.tun_writers = tun_writers;
-        self.read_tasks = read_tasks;
+        self.tun_readers = tun_readers;
 
         Ok(())
     }
 
-    async fn read_from_tun(mut tun_reader: TunReader, sender: Sender<Message>) {
+    async fn read_from_tun(
+        mut tun_reader: TunReader,
+        encrypt_sender: Sender<EncryptMessage>,
+    ) -> anyhow::Result<()> {
         let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
             buf.reserve(1500);
@@ -118,49 +99,111 @@ impl TunActor {
                 Err(err) => {
                     error!(%err, "receive tun packet failed");
 
-                    let _ = sender.try_send(Message::FromTun(Err(err)));
-
-                    return;
+                    return Err(err.into());
                 }
 
                 Ok(_) => buf.split().freeze(),
             };
 
-            match sender.try_send(Message::FromTun(Ok(packet))) {
+            let dst_ip = match ip_packet::get_packet_ip(&packet, IpLocation::Dst) {
+                None => {
+                    debug!("drop no dst ip packet");
+
+                    continue;
+                }
+
+                Some(ip) => ip,
+            };
+
+            let src_ip = match ip_packet::get_packet_ip(&packet, IpLocation::Src) {
+                None => {
+                    debug!("drop no src ip packet");
+
+                    continue;
+                }
+
+                Some(ip) => ip,
+            };
+
+            match encrypt_sender.try_send(EncryptMessage::Packet(packet)) {
                 Err(TrySendError::Full(_)) => {
-                    warn!("tun actor mailbox full");
+                    warn!("encrypt actor mailbox is full");
                 }
 
                 Err(err) => {
-                    error!(%err, "send tun packet failed");
-
-                    return;
+                    return Err(err.into());
                 }
 
-                Ok(_) => {}
+                Ok(_) => {
+                    debug!(%src_ip, %dst_ip, "send packet to encrypt done");
+                }
             }
         }
     }
 
     pub async fn run(&mut self) {
+        let mut join_set = JoinSet::new();
+
         loop {
-            if let Err(err) = self.run_circle().await {
-                error!(%err, "tun run circle failed, need restart");
+            let count = self.tun_writers.len();
+            for tun_writer in self.tun_writers.drain(..) {
+                let mut tun_actor_queue_writer = TunActorQueueWriter {
+                    mailbox: self.mailbox.clone(),
+                    tun_writer,
+                };
 
-                loop {
-                    match self.restart().await {
-                        Err(err) => {
-                            error!(%err, "tun restart failed");
-                        }
+                join_set.spawn(async move { tun_actor_queue_writer.run().await });
+            }
 
-                        Ok(_) => {
-                            info!("tun restart done");
+            for tun_reader in self.tun_readers.drain(..) {
+                let encrypt_sender = self.encrypt_sender.clone();
 
-                            break;
-                        }
+                join_set.spawn(Self::read_from_tun(tun_reader, encrypt_sender));
+            }
+
+            info!("start {count} tun actor queue writer done");
+
+            while let Some(result) = join_set.join_next().await {
+                if let Err(err) = result.unwrap() {
+                    error!(%err, "tun actor queue writer stop with error");
+
+                    break;
+                }
+            }
+
+            join_set.shutdown().await;
+
+            error!("tun actor queue writer stop, need restart");
+
+            loop {
+                match self.restart().await {
+                    Err(err) => {
+                        error!(%err, "tun actor restart failed");
+                    }
+
+                    Ok(_) => {
+                        info!("tun actor restart done");
+
+                        break;
                     }
                 }
             }
+        }
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+struct TunActorQueueWriter {
+    #[derivative(Debug = "ignore")]
+    mailbox: Receiver<Message>,
+    tun_writer: TunWriter,
+}
+
+impl TunActorQueueWriter {
+    async fn run(&mut self) -> anyhow::Result<()> {
+        loop {
+            self.run_circle().await?;
         }
     }
 
@@ -176,58 +219,8 @@ impl TunActor {
         };
 
         match message {
-            Message::FromTun(Err(err)) => {
-                error!(%err, "read packet from tun failed");
-
-                Err(err.into())
-            }
-
-            Message::FromTun(Ok(packet)) => {
-                let dst_ip = match ip_packet::get_packet_ip(&packet, IpLocation::Dst) {
-                    None => {
-                        debug!("drop no dst ip packet");
-
-                        return Ok(());
-                    }
-
-                    Some(ip) => ip,
-                };
-
-                let src_ip = match ip_packet::get_packet_ip(&packet, IpLocation::Src) {
-                    None => {
-                        debug!("drop no src ip packet");
-
-                        return Ok(());
-                    }
-
-                    Some(ip) => ip,
-                };
-
-                match self.encrypt_sender.try_send(EncryptMessage::Packet(packet)) {
-                    Err(TrySendError::Full(_)) => {
-                        warn!("encrypt actor mailbox is full");
-
-                        Ok(())
-                    }
-
-                    Err(err) => {
-                        error!(%err, "send packet to encrypt failed");
-
-                        Err(err.into())
-                    }
-
-                    Ok(_) => {
-                        debug!(%src_ip, %dst_ip, "send packet to encrypt done");
-
-                        Ok(())
-                    }
-                }
-            }
-
             Message::ToTun(packet) => {
-                let tun_writers = self.tun_writers.choose_mut(&mut thread_rng()).unwrap();
-
-                match Pin::new(tun_writers)
+                match Pin::new(&mut self.tun_writer)
                     .poll_write(&mut Context::from_waker(noop_waker_ref()), &packet)
                 {
                     Poll::Pending => {

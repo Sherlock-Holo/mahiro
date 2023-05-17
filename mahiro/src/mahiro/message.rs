@@ -18,6 +18,5 @@ pub enum EncryptMessage {
 }
 
 pub enum TunMessage {
-    FromTun(io::Result<Bytes>),
     ToTun(Bytes),
 }
