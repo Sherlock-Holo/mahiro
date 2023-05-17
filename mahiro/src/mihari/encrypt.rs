@@ -488,6 +488,10 @@ impl EncryptActorTransportInner {
                     }
 
                     Some(DataOrHeartbeat::Data(data)) => {
+                        // also update heartbeat instant, because we receive the data frame, means
+                        // peer is alive
+                        *heartbeat_receive_instant.write().await = Instant::now();
+
                         if !has_save_link_local_ipv6.load(Ordering::Acquire) {
                             match get_packet_ip(data, IpLocation::Src) {
                                 None => {

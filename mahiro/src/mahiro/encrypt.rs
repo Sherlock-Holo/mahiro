@@ -577,6 +577,10 @@ impl EncryptActorTransportInner {
                     }
 
                     Some(DataOrHeartbeat::Data(data)) => {
+                        // also update heartbeat instant, because we receive the data frame, means
+                        // peer is alive
+                        *heartbeat_receive_instant.write().await = Instant::now();
+
                         match tun_sender.try_send(TunMessage::ToTun(data.clone())) {
                             Err(TrySendError::Full(_)) => {
                                 warn!("tun mailbox is full, drop packet");
