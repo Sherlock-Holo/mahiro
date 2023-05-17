@@ -1,3 +1,6 @@
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::thread::available_parallelism;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -6,7 +9,8 @@ use flume::{Sender, TrySendError};
 use futures_util::StreamExt;
 use prost::Message as _;
 use tap::TapFallible;
-use tokio::task::JoinHandle;
+use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, warn};
@@ -38,20 +42,8 @@ enum State {
 
     Transport {
         cookie: Cookie,
-        encrypt: Encrypt,
-        #[derivative(Debug = "ignore")]
-        buffer: Vec<u8>,
-        heartbeat_receive_instant: Instant,
-        heartbeat_task: JoinHandle<()>,
+        encrypt: Arc<Encrypt>,
     },
-}
-
-impl Drop for State {
-    fn drop(&mut self) {
-        if let Self::Transport { heartbeat_task, .. } = self {
-            heartbeat_task.abort();
-        }
-    }
 }
 
 #[derive(Derivative)]
@@ -150,28 +142,87 @@ impl EncryptActor {
 
     pub async fn run(&mut self) {
         loop {
-            if let Err(err) = self.run_circle().await {
-                error!(%err, "encrypt actor run circle failed, need restart");
+            match self.run_handshake_circle().await {
+                Err(err) => {
+                    error!(%err, "encrypt actor run circle failed, need restart");
+                }
 
-                loop {
-                    match self.restart().await {
-                        Err(err) => {
-                            error!(%err, "encrypt actor restart failed");
-                        }
+                Ok(change_to_transport) => {
+                    if !change_to_transport {
+                        continue;
+                    }
 
-                        Ok(_) => {
-                            info!("encrypt actor restart done");
+                    let err = self.run_transport().await;
 
-                            break;
-                        }
+                    error!(%err, "run transport failed");
+                }
+            }
+
+            loop {
+                match self.restart().await {
+                    Err(err) => {
+                        error!(%err, "encrypt actor restart failed");
+                    }
+
+                    Ok(_) => {
+                        info!("encrypt actor restart done");
+
+                        break;
                     }
                 }
             }
         }
     }
 
+    /// run_transport should not stop when normal
+    async fn run_transport(&mut self) -> anyhow::Error {
+        match &self.state {
+            State::Transport { cookie, encrypt } => {
+                let mut join_set = JoinSet::new();
+                let heartbeat_receive_instant = Arc::new(RwLock::new(Instant::now()));
+                let heartbeat_interval = self.heartbeat_interval;
+                let mailbox_sender = self.mailbox_sender.clone();
+                join_set.spawn(async move {
+                    Self::heartbeat(heartbeat_interval, mailbox_sender).await;
+
+                    Ok(())
+                });
+
+                let parallel = available_parallelism()
+                    .unwrap_or(NonZeroUsize::new(4).unwrap())
+                    .get();
+                for _ in 0..parallel {
+                    let mut encrypt_actor_transport_inner = EncryptActorTransportInner {
+                        mailbox: self.mailbox.clone(),
+                        udp_sender: self.udp_sender.clone(),
+                        tun_sender: self.tun_sender.clone(),
+                        cookie: cookie.clone(),
+                        encrypt: encrypt.clone(),
+                        buffer: vec![0; 65535],
+                        heartbeat_receive_instant: heartbeat_receive_instant.clone(),
+                        heartbeat_interval,
+                    };
+
+                    join_set.spawn(async move { encrypt_actor_transport_inner.run().await });
+                }
+
+                while let Some(result) = join_set.join_next().await {
+                    if let Err(err) = result.unwrap() {
+                        error!(%err, "encrypt actor transport inner run failed");
+
+                        return err;
+                    }
+                }
+
+                anyhow::anyhow!("encrypt actor transport inner stopped")
+            }
+
+            _ => unreachable!(),
+        }
+    }
+
     #[instrument(err)]
-    async fn run_circle(&mut self) -> anyhow::Result<()> {
+    async fn run_handshake_circle(&mut self) -> anyhow::Result<bool> {
         let message = match self.mailbox.next().await {
             None => {
                 error!("get message from encrypt mailbox failed");
@@ -197,90 +248,23 @@ impl EncryptActor {
                     info!("change to handshake state done");
                 }
 
-                Ok(())
+                Ok(false)
             }
 
             State::Handshake { cookie, encrypt } => {
-                if let Some(new_state) = Self::handle_handshake(
-                    message,
-                    cookie,
-                    encrypt,
-                    self.heartbeat_interval,
-                    self.mailbox_sender.clone(),
-                )
-                .await?
-                {
+                if let Some(new_state) = Self::handle_handshake(message, cookie, encrypt).await? {
                     self.state = new_state;
 
                     info!("handshake done");
-                }
 
-                Ok(())
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
             }
 
-            State::Transport {
-                cookie,
-                encrypt,
-                buffer,
-                heartbeat_receive_instant,
-                ..
-            } => {
-                match message {
-                    Message::Init | Message::HandshakeTimeout => {
-                        // drop init or handshake timeout message when actor is transport
-                        debug!("ignore init or handshake message");
-
-                        Ok(())
-                    }
-
-                    Message::Packet(packet) => {
-                        Self::handle_transport_packet(
-                            cookie,
-                            packet,
-                            buffer,
-                            encrypt,
-                            &mut self.udp_sender,
-                        )
-                        .await?;
-
-                        debug!("handle transport packet done");
-
-                        Ok(())
-                    }
-
-                    Message::Frame(frame) => {
-                        Self::handle_transport_frame(
-                            cookie,
-                            frame,
-                            buffer,
-                            encrypt,
-                            heartbeat_receive_instant,
-                            &mut self.udp_sender,
-                            &mut self.tun_sender,
-                        )
-                        .await?;
-
-                        debug!("handle transport frame done");
-
-                        Ok(())
-                    }
-
-                    Message::Heartbeat => {
-                        Self::handle_transport_heartbeat(
-                            cookie,
-                            buffer,
-                            encrypt,
-                            self.heartbeat_interval,
-                            heartbeat_receive_instant,
-                            &mut self.udp_sender,
-                        )
-                        .await?;
-
-                        debug!("handle transport heartbeat done");
-
-                        Ok(())
-                    }
-                }
+            State::Transport { .. } => {
+                unreachable!()
             }
         }
     }
@@ -324,8 +308,6 @@ impl EncryptActor {
         message: Message,
         cookie: &Bytes,
         encrypt: &mut Option<Encrypt>,
-        heartbeat_interval: Duration,
-        mailbox_sender: Sender<Message>,
     ) -> anyhow::Result<Option<State>> {
         let data = match message {
             Message::Init | Message::Packet(_) | Message::Heartbeat => {
@@ -358,16 +340,103 @@ impl EncryptActor {
         let mut encrypt = encrypt.take().unwrap();
         encrypt = encrypt.into_transport_mode()?;
 
-        let heartbeat_task =
-            tokio::spawn(async move { Self::heartbeat(heartbeat_interval, mailbox_sender).await });
-
         Ok(Some(State::Transport {
             cookie: cookie.clone().into(),
-            encrypt,
-            buffer: vec![0; 65535],
-            heartbeat_receive_instant: Instant::now(),
-            heartbeat_task,
+            encrypt: Arc::new(encrypt),
         }))
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+struct EncryptActorTransportInner {
+    #[derivative(Debug = "ignore")]
+    mailbox: Receiver<Message>,
+    udp_sender: Sender<UdpMessage>,
+    tun_sender: Sender<TunMessage>,
+    cookie: Cookie,
+    encrypt: Arc<Encrypt>,
+    #[derivative(Debug = "ignore")]
+    buffer: Vec<u8>,
+    heartbeat_receive_instant: Arc<RwLock<Instant>>,
+    heartbeat_interval: Duration,
+}
+
+impl EncryptActorTransportInner {
+    async fn run(&mut self) -> anyhow::Result<()> {
+        loop {
+            self.run_circle().await?;
+        }
+    }
+
+    #[instrument(err)]
+    async fn run_circle(&mut self) -> anyhow::Result<()> {
+        let message = match self.mailbox.next().await {
+            None => {
+                error!("get message from encrypt mailbox failed");
+
+                return Err(anyhow::anyhow!("get message from encrypt mailbox failed"));
+            }
+
+            Some(message) => message,
+        };
+
+        match message {
+            Message::Init | Message::HandshakeTimeout => {
+                // drop init or handshake timeout message when actor is transport
+                debug!("ignore init or handshake message");
+
+                Ok(())
+            }
+
+            Message::Packet(packet) => {
+                Self::handle_transport_packet(
+                    &self.cookie,
+                    packet,
+                    &mut self.buffer,
+                    &self.encrypt,
+                    &mut self.udp_sender,
+                )
+                .await?;
+
+                debug!("handle transport packet done");
+
+                Ok(())
+            }
+
+            Message::Frame(frame) => {
+                Self::handle_transport_frame(
+                    &self.cookie,
+                    frame,
+                    &mut self.buffer,
+                    &self.encrypt,
+                    &self.heartbeat_receive_instant,
+                    &mut self.udp_sender,
+                    &mut self.tun_sender,
+                )
+                .await?;
+
+                debug!("handle transport frame done");
+
+                Ok(())
+            }
+
+            Message::Heartbeat => {
+                Self::handle_transport_heartbeat(
+                    &self.cookie,
+                    &mut self.buffer,
+                    &self.encrypt,
+                    self.heartbeat_interval,
+                    &self.heartbeat_receive_instant,
+                    &mut self.udp_sender,
+                )
+                .await?;
+
+                debug!("handle transport heartbeat done");
+
+                Ok(())
+            }
+        }
     }
 
     async fn handle_transport_packet(
@@ -415,7 +484,7 @@ impl EncryptActor {
         frame: Frame,
         buffer: &mut [u8],
         encrypt: &Encrypt,
-        heartbeat_receive_instant: &mut Instant,
+        heartbeat_receive_instant: &RwLock<Instant>,
         udp_sender: &mut Sender<UdpMessage>,
         tun_sender: &mut Sender<TunMessage>,
     ) -> anyhow::Result<()> {
@@ -469,7 +538,7 @@ impl EncryptActor {
                         }
 
                         if matches!(frame_data.data_or_heartbeat, Some(DataOrHeartbeat::Pong(_))) {
-                            *heartbeat_receive_instant = Instant::now();
+                            *heartbeat_receive_instant.write().await = Instant::now();
                         } else {
                             let pong_frame_data = FrameData {
                                 timestamp: generate_timestamp(),
@@ -534,10 +603,10 @@ impl EncryptActor {
         buffer: &mut [u8],
         encrypt: &Encrypt,
         heartbeat_interval: Duration,
-        heartbeat_receive_instant: &mut Instant,
+        heartbeat_receive_instant: &RwLock<Instant>,
         udp_sender: &mut Sender<UdpMessage>,
     ) -> anyhow::Result<()> {
-        if heartbeat_receive_instant.elapsed() > heartbeat_interval * 2 {
+        if heartbeat_receive_instant.read().await.elapsed() > heartbeat_interval * 2 {
             error!("heartbeat timeout");
 
             return Err(anyhow::anyhow!("heartbeat timeout"));

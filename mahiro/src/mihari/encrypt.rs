@@ -1,4 +1,8 @@
 use std::net::{IpAddr, SocketAddr};
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread::available_parallelism;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -7,7 +11,8 @@ use flume::{Sender, TrySendError};
 use futures_util::StreamExt;
 use prost::Message as _;
 use tap::TapFallible;
-use tokio::task::JoinHandle;
+use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, warn};
@@ -32,22 +37,12 @@ type Cookie = PublicKey;
 enum State {
     Transport {
         cookie: Cookie,
-        encrypt: Encrypt,
-        #[derivative(Debug = "ignore")]
-        buffer: Vec<u8>,
-        heartbeat_receive_instant: Instant,
-        heartbeat_task: JoinHandle<()>,
-        connected_peers: PeerStore,
-        latest_timestamp: u64,
-        has_save_link_local_ipv6: bool,
+        encrypt: Arc<Encrypt>,
+        heartbeat_receive_instant: Arc<RwLock<Instant>>,
+        peer_store: PeerStore,
+        latest_timestamp: Arc<AtomicU64>,
+        has_save_link_local_ipv6: Arc<AtomicBool>,
     },
-}
-
-impl Drop for State {
-    fn drop(&mut self) {
-        let Self::Transport { heartbeat_task, .. } = self;
-        heartbeat_task.abort();
-    }
 }
 
 #[derive(Derivative)]
@@ -127,11 +122,6 @@ impl EncryptActor {
 
                 encrypt = encrypt.into_transport_mode()?;
 
-                let heartbeat_task = {
-                    let mailbox_sender = mailbox_sender.clone();
-                    tokio::spawn(Self::heartbeat(heartbeat_interval, mailbox_sender))
-                };
-
                 // make sure tun actor can find this encrypt actor
                 peer_store.add_mahiro_ip(mahiro_ipv4.into(), mailbox_sender.clone());
                 peer_store.add_mahiro_ip(mahiro_ipv6.into(), mailbox_sender.clone());
@@ -144,13 +134,11 @@ impl EncryptActor {
                         tun_sender,
                         state: State::Transport {
                             cookie: frame.cookie.into(),
-                            encrypt,
-                            buffer: vec![0; 65535],
-                            heartbeat_receive_instant: Instant::now(),
-                            heartbeat_task,
-                            connected_peers: peer_store.clone(),
-                            latest_timestamp: timestamp,
-                            has_save_link_local_ipv6: false,
+                            encrypt: Arc::new(encrypt),
+                            heartbeat_receive_instant: Arc::new(RwLock::new(Instant::now())),
+                            peer_store: peer_store.clone(),
+                            latest_timestamp: Arc::new(AtomicU64::new(timestamp)),
+                            has_save_link_local_ipv6: Arc::new(AtomicBool::new(false)),
                         },
                         heartbeat_interval,
                     },
@@ -161,8 +149,57 @@ impl EncryptActor {
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        loop {
-            self.run_circle().await?;
+        let mut join_set = JoinSet::new();
+
+        match &self.state {
+            State::Transport {
+                cookie,
+                encrypt,
+                heartbeat_receive_instant,
+                peer_store,
+                latest_timestamp,
+                has_save_link_local_ipv6,
+            } => {
+                let parallel = available_parallelism()
+                    .unwrap_or(NonZeroUsize::new(4).unwrap())
+                    .get();
+                let heartbeat_interval = self.heartbeat_interval;
+                let mailbox_sender = self.mailbox_sender.clone();
+                for _ in 0..parallel {
+                    let mut encrypt_actor_transport_inner = EncryptActorTransportInner {
+                        mailbox_sender: mailbox_sender.clone(),
+                        mailbox: self.mailbox.clone(),
+                        udp_sender: self.udp_sender.clone(),
+                        tun_sender: self.tun_sender.clone(),
+                        cookie: cookie.clone(),
+                        encrypt: encrypt.clone(),
+                        buffer: vec![0; 65535],
+                        heartbeat_receive_instant: heartbeat_receive_instant.clone(),
+                        heartbeat_interval,
+                        peer_store: peer_store.clone(),
+                        latest_timestamp: latest_timestamp.clone(),
+                        has_save_link_local_ipv6: has_save_link_local_ipv6.clone(),
+                    };
+
+                    join_set.spawn(async move { encrypt_actor_transport_inner.run().await });
+                }
+
+                join_set.spawn(async move {
+                    Self::heartbeat(heartbeat_interval, mailbox_sender).await;
+
+                    Ok(())
+                });
+
+                while let Some(result) = join_set.join_next().await {
+                    if let Err(err) = result.unwrap() {
+                        error!(%err, "encrypt actor transport inner run failed");
+
+                        return Err(err);
+                    }
+                }
+
+                Err(anyhow::anyhow!("encrypt actor transport inner stopped"))
+            }
         }
     }
 
@@ -181,6 +218,64 @@ impl EncryptActor {
             }
         }
     }
+}
+
+struct HandleTransportFrameArgs<'a> {
+    frame: Frame,
+    from: SocketAddr,
+    buffer: &'a mut [u8],
+    encrypt: &'a Encrypt,
+    heartbeat_receive_instant: &'a RwLock<Instant>,
+    mailbox_sender: &'a mut Sender<Message>,
+    udp_sender: &'a mut Sender<UdpMessage>,
+    tun_sender: &'a mut Sender<TunMessage>,
+    peer_store: &'a PeerStore,
+    latest_timestamp: &'a AtomicU64,
+    has_save_link_local_ipv6: &'a AtomicBool,
+}
+
+fn get_peer_addr_by_cookie(
+    connected_peers: &PeerStore,
+    cookie: &Bytes,
+) -> anyhow::Result<SocketAddr> {
+    match connected_peers.get_peer_info_by_cookie(cookie) {
+        None => {
+            error!("peer info miss, encrypt actor in invalid status");
+
+            Err(anyhow::anyhow!(
+                "peer info miss, encrypt actor in invalid status"
+            ))
+        }
+
+        Some(peer_info) => Ok(peer_info.addr),
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+struct EncryptActorTransportInner {
+    mailbox_sender: Sender<Message>,
+    #[derivative(Debug = "ignore")]
+    mailbox: Receiver<Message>,
+    udp_sender: Sender<UdpMessage>,
+    tun_sender: Sender<TunMessage>,
+    cookie: Cookie,
+    encrypt: Arc<Encrypt>,
+    #[derivative(Debug = "ignore")]
+    buffer: Vec<u8>,
+    heartbeat_receive_instant: Arc<RwLock<Instant>>,
+    heartbeat_interval: Duration,
+    peer_store: PeerStore,
+    latest_timestamp: Arc<AtomicU64>,
+    has_save_link_local_ipv6: Arc<AtomicBool>,
+}
+
+impl EncryptActorTransportInner {
+    async fn run(&mut self) -> anyhow::Result<()> {
+        loop {
+            self.run_circle().await?;
+        }
+    }
 
     #[instrument(err)]
     async fn run_circle(&mut self) -> anyhow::Result<()> {
@@ -194,75 +289,64 @@ impl EncryptActor {
             Some(message) => message,
         };
 
-        match &mut self.state {
-            State::Transport {
-                cookie,
-                encrypt,
-                buffer,
-                heartbeat_receive_instant,
-                connected_peers,
-                latest_timestamp,
-                has_save_link_local_ipv6,
-                ..
-            } => match message {
-                Message::Packet(packet) => {
-                    let remote_addr = get_peer_addr_by_cookie(connected_peers, cookie)?;
+        match message {
+            Message::Packet(packet) => {
+                let remote_addr = get_peer_addr_by_cookie(&self.peer_store, &self.cookie)?;
 
-                    Self::handle_transport_packet(
-                        cookie,
-                        packet,
-                        remote_addr,
-                        buffer,
-                        encrypt,
-                        &mut self.udp_sender,
-                    )
-                    .await?;
+                Self::handle_transport_packet(
+                    &self.cookie,
+                    packet,
+                    remote_addr,
+                    &mut self.buffer,
+                    &self.encrypt,
+                    &self.udp_sender,
+                )
+                .await?;
 
-                    debug!("handle transport packet done");
+                debug!("handle transport packet done");
 
-                    Ok(())
-                }
+                Ok(())
+            }
 
-                Message::Frame { frame, from } => {
-                    Self::handle_handshake_frame(HandleHandshakeFrameArgs {
-                        frame,
-                        from,
-                        buffer,
-                        encrypt,
-                        heartbeat_receive_instant,
-                        mailbox_sender: &mut self.mailbox_sender,
-                        udp_sender: &mut self.udp_sender,
-                        tun_sender: &mut self.tun_sender,
-                        peer_store: connected_peers,
-                        latest_timestamp,
-                        has_save_link_local_ipv6,
-                    })
-                    .await?;
+            Message::Frame { frame, from } => {
+                Self::handle_transport_frame(HandleTransportFrameArgs {
+                    frame,
+                    from,
+                    buffer: &mut self.buffer,
+                    encrypt: &self.encrypt,
+                    heartbeat_receive_instant: &self.heartbeat_receive_instant,
+                    mailbox_sender: &mut self.mailbox_sender,
+                    udp_sender: &mut self.udp_sender,
+                    tun_sender: &mut self.tun_sender,
+                    peer_store: &self.peer_store,
+                    latest_timestamp: &self.latest_timestamp,
+                    has_save_link_local_ipv6: &self.has_save_link_local_ipv6,
+                })
+                .await?;
 
-                    debug!("handle transport frame done");
+                debug!("handle transport frame done");
 
-                    Ok(())
-                }
+                Ok(())
+            }
 
-                Message::Heartbeat => {
-                    let remote_addr = get_peer_addr_by_cookie(connected_peers, cookie)?;
+            Message::Heartbeat => {
+                let remote_addr = get_peer_addr_by_cookie(&self.peer_store, &self.cookie)?;
 
-                    Self::handle_transport_heartbeat(
-                        cookie,
-                        buffer,
-                        remote_addr,
-                        encrypt,
-                        self.heartbeat_interval,
-                        heartbeat_receive_instant,
-                        &mut self.udp_sender,
-                    )
-                    .await?;
+                Self::handle_transport_heartbeat(
+                    &self.cookie,
+                    &mut self.buffer,
+                    remote_addr,
+                    &self.encrypt,
+                    self.heartbeat_interval,
+                    &self.heartbeat_receive_instant,
+                    &mut self.udp_sender,
+                )
+                .await?;
 
-                    debug!("handle transport heartbeat done");
+                debug!("handle transport heartbeat done");
 
-                    Ok(())
-                }
-            },
+                Ok(())
+            }
         }
     }
 
@@ -272,7 +356,7 @@ impl EncryptActor {
         to: SocketAddr,
         buffer: &mut [u8],
         encrypt: &Encrypt,
-        udp_sender: &mut Sender<UdpMessage>,
+        udp_sender: &Sender<UdpMessage>,
     ) -> anyhow::Result<()> {
         let nonce = util::generate_nonce();
         let data = FrameData {
@@ -307,8 +391,8 @@ impl EncryptActor {
         }
     }
 
-    async fn handle_handshake_frame(
-        HandleHandshakeFrameArgs {
+    async fn handle_transport_frame(
+        HandleTransportFrameArgs {
             frame,
             from,
             buffer,
@@ -320,7 +404,7 @@ impl EncryptActor {
             peer_store,
             latest_timestamp,
             has_save_link_local_ipv6,
-        }: HandleHandshakeFrameArgs<'_>,
+        }: HandleTransportFrameArgs<'_>,
     ) -> anyhow::Result<()> {
         match frame.r#type() {
             FrameType::Handshake => {
@@ -367,7 +451,7 @@ impl EncryptActor {
                         }
 
                         if matches!(frame_data.data_or_heartbeat, Some(DataOrHeartbeat::Pong(_))) {
-                            *heartbeat_receive_instant = Instant::now();
+                            *heartbeat_receive_instant.write().await = Instant::now();
                         } else {
                             let pong_frame_data = FrameData {
                                 timestamp: generate_timestamp(),
@@ -404,7 +488,7 @@ impl EncryptActor {
                     }
 
                     Some(DataOrHeartbeat::Data(data)) => {
-                        if !*has_save_link_local_ipv6 {
+                        if !has_save_link_local_ipv6.load(Ordering::Acquire) {
                             match get_packet_ip(data, IpLocation::Src) {
                                 None => {
                                     error!("drop not ip packet");
@@ -420,7 +504,7 @@ impl EncryptActor {
                                                 mailbox_sender.clone(),
                                             );
 
-                                            *has_save_link_local_ipv6 = true;
+                                            has_save_link_local_ipv6.store(true, Ordering::Release);
                                         }
                                     }
                                 }
@@ -445,7 +529,17 @@ impl EncryptActor {
                     }
                 }
 
-                if frame_data.timestamp > *latest_timestamp {
+                let old_timestamp = latest_timestamp.load(Ordering::Acquire);
+                if frame_data.timestamp > old_timestamp
+                    && latest_timestamp
+                        .compare_exchange(
+                            old_timestamp,
+                            frame_data.timestamp,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                {
                     if let Some(old_addr) = peer_store.update_peer_addr(&frame.cookie, from) {
                         info!(%old_addr, new_addr = %from, "peer update addr done");
                     }
@@ -462,10 +556,10 @@ impl EncryptActor {
         to: SocketAddr,
         encrypt: &Encrypt,
         heartbeat_interval: Duration,
-        heartbeat_receive_instant: &mut Instant,
+        heartbeat_receive_instant: &RwLock<Instant>,
         udp_sender: &mut Sender<UdpMessage>,
     ) -> anyhow::Result<()> {
-        if heartbeat_receive_instant.elapsed() > heartbeat_interval * 2 {
+        if heartbeat_receive_instant.read().await.elapsed() > heartbeat_interval * 2 {
             error!("heartbeat timeout");
 
             return Err(anyhow::anyhow!("heartbeat timeout"));
@@ -505,37 +599,6 @@ impl EncryptActor {
     }
 }
 
-struct HandleHandshakeFrameArgs<'a> {
-    frame: Frame,
-    from: SocketAddr,
-    buffer: &'a mut [u8],
-    encrypt: &'a Encrypt,
-    heartbeat_receive_instant: &'a mut Instant,
-    mailbox_sender: &'a mut Sender<Message>,
-    udp_sender: &'a mut Sender<UdpMessage>,
-    tun_sender: &'a mut Sender<TunMessage>,
-    peer_store: &'a PeerStore,
-    latest_timestamp: &'a mut u64,
-    has_save_link_local_ipv6: &'a mut bool,
-}
-
-fn get_peer_addr_by_cookie(
-    connected_peers: &PeerStore,
-    cookie: &Bytes,
-) -> anyhow::Result<SocketAddr> {
-    match connected_peers.get_peer_info_by_cookie(cookie) {
-        None => {
-            error!("peer info miss, encrypt actor in invalid status");
-
-            Err(anyhow::anyhow!(
-                "peer info miss, encrypt actor in invalid status"
-            ))
-        }
-
-        Some(peer_info) => Ok(peer_info.addr),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -553,9 +616,9 @@ mod tests {
         let responder_keypair = Encrypt::generate_keypair().unwrap();
         let mut initiator_encrypt =
             Encrypt::new_initiator(&initiator_keypair.private, &responder_keypair.public).unwrap();
-        let (tun_sender, mut tun_mailbox) = flume::bounded(10);
-        let (udp_sender, mut udp_mailbox) = flume::bounded(10);
-        let (mut mailbox_sender, mailbox) = flume::bounded(10);
+        let (tun_sender, tun_mailbox) = flume::bounded(10);
+        let (udp_sender, udp_mailbox) = flume::bounded(10);
+        let (mailbox_sender, mailbox) = flume::bounded(10);
 
         let cookie = generate_cookie();
         let timestamp = generate_timestamp().to_be_bytes();
@@ -622,7 +685,6 @@ mod tests {
         let tun_message = tun_mailbox.next().await.unwrap();
         match tun_message {
             TunMessage::ToTun(data) => assert_eq!(data.as_ref(), b"hello"),
-            _ => panic!("inlaid tun message"),
         }
 
         mailbox_sender

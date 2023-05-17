@@ -143,7 +143,6 @@ impl TunActor {
 
     pub async fn run(&mut self) {
         let mut join_set = JoinSet::new();
-
         loop {
             let count = self.tun_writers.len();
             for tun_writer in self.tun_writers.drain(..) {
