@@ -25,8 +25,8 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::spawn(conn);
 
-    let (tun_sender, tun_mailbox) = flume::bounded(1);
-    let (udp_sender, udp_mailbox) = flume::bounded(10);
+    let (tun_sender, tun_mailbox) = flume::bounded(64);
+    let (udp_sender, udp_mailbox) = flume::bounded(64);
 
     let peer_store = PeerStore::from(config.peers.into_iter().map(|peer| {
         (

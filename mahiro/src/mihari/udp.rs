@@ -222,7 +222,7 @@ impl UdpActor {
 
                     None => {
                         let cookie = frame.cookie.clone();
-                        let (mailbox_sender, mailbox) = flume::bounded(10);
+                        let (mailbox_sender, mailbox) = flume::bounded(64);
                         match EncryptActor::new(
                             mailbox_sender.clone(),
                             mailbox.into_stream(),

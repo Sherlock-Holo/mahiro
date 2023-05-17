@@ -27,9 +27,9 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
         netlink_handle: handle,
     };
 
-    let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
-    let (udp_sender, udp_mailbox) = flume::bounded(10);
-    let (tun_sender, tun_mailbox) = flume::bounded(1);
+    let (encrypt_sender, encrypt_mailbox) = flume::bounded(64);
+    let (udp_sender, udp_mailbox) = flume::bounded(64);
+    let (tun_sender, tun_mailbox) = flume::bounded(64);
 
     let mut udp_actor = UdpActor::new(
         encrypt_sender.clone(),
