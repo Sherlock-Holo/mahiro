@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::future;
+use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::time::Duration;
@@ -18,6 +19,7 @@ use netlink_packet_route::link::nlas::Nla as LinkNla;
 use rtnetlink::{AddressHandle, Handle, LinkHandle};
 use tap::TapFallible;
 use tokio::time;
+use tokio_stream::wrappers::IntervalStream;
 use tracing::error;
 use tracing_log::LogTracer;
 
@@ -66,7 +68,17 @@ impl NatActor {
         Self::set_bpf_map(&mut bpf, mahiro_ipv4_network, mahiro_ipv6_network)?;
 
         for nic in &watch_nic_list {
-            tc::qdisc_add_clsact(nic).tap_err(|err| error!(%err, %nic, "set qdisc failed"))?;
+            match tc::qdisc_add_clsact(nic) {
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+
+                Err(err) => {
+                    error!(%err, %nic, "set qdisc failed");
+
+                    return Err(err.into());
+                }
+
+                Ok(_) => {}
+            }
         }
 
         let attached_bpf_programs = Self::attach_nic(&mut bpf, &watch_nic_list)?;
@@ -107,14 +119,7 @@ impl NatActor {
                 .tap_err(|err| error!(%err, "snat egress bpf take link failed"))?;
             let link = OwnedSchedClassifierLink::from(link);
 
-            match attached_bpf_programs.get_mut(nic) {
-                None => {
-                    attached_bpf_programs.insert(nic.clone(), vec![link]);
-                }
-                Some(links) => {
-                    links.push(link);
-                }
-            }
+            attached_bpf_programs.insert(nic.clone(), vec![link]);
         }
 
         let dnat_ingress_prog: &mut SchedClassifier = bpf
@@ -135,14 +140,7 @@ impl NatActor {
                 .tap_err(|err| error!(%err, "dnat ingress bpf take link failed"))?;
             let link = OwnedSchedClassifierLink::from(link);
 
-            match attached_bpf_programs.get_mut(nic) {
-                None => {
-                    attached_bpf_programs.insert(nic.clone(), vec![link]);
-                }
-                Some(links) => {
-                    links.push(link);
-                }
-            }
+            attached_bpf_programs.get_mut(nic).unwrap().push(link);
         }
 
         Ok(attached_bpf_programs)
@@ -241,11 +239,16 @@ impl NatActor {
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        loop {
-            self.run_circle().await?;
+        let mut interval_stream = IntervalStream::new(time::interval(WATCH_INTERVAL));
+        interval_stream.next().await;
 
-            time::sleep(WATCH_INTERVAL).await;
+        while (interval_stream.next().await).is_some() {
+            if let Err(err) = self.run_circle().await {
+                error!(%err, "update nic addr failed");
+            }
         }
+
+        unreachable!("interval stream stopped")
     }
 
     async fn run_circle(&mut self) -> anyhow::Result<()> {
