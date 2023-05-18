@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use aya::maps::lpm_trie::{Key, LpmTrie};
-use aya::maps::{HashMap as BpfHashMap, MapError, MapRefMut};
+use aya::maps::{HashMap as BpfHashMap, MapData, MapError};
 use aya::programs::tc::SchedClassifierLink;
 use aya::programs::{tc, Link, SchedClassifier, TcAttachType};
 use aya::Bpf;
@@ -112,7 +112,7 @@ impl NatActor {
 
         for nic in watch_nic_list {
             let link_id = snat_egress_prog
-                .attach(nic, TcAttachType::Egress, 0)
+                .attach(nic, TcAttachType::Egress)
                 .tap_err(|err| error!(%err, %nic, "attach snat egress bpf program failed"))?;
             let link = snat_egress_prog
                 .take_link(link_id)
@@ -133,7 +133,7 @@ impl NatActor {
 
         for nic in watch_nic_list {
             let link_id = dnat_ingress_prog
-                .attach(nic, TcAttachType::Ingress, 0)
+                .attach(nic, TcAttachType::Ingress)
                 .tap_err(|err| error!(%err, %nic, "attach dnat ingress bpf program failed"))?;
             let link = dnat_ingress_prog
                 .take_link(link_id)
@@ -151,7 +151,7 @@ impl NatActor {
         mahiro_ipv4_network: Ipv4Inet,
         mahiro_ipv6_network: Ipv6Inet,
     ) -> anyhow::Result<()> {
-        Self::fn_with_ipv4_mahiro_ip(bpf, |lpm_trie| {
+        Self::fn_with_ipv4_mahiro_ip(bpf, |mut lpm_trie| {
             let addr = mahiro_ipv4_network.address().into();
             let prefix = mahiro_ipv4_network.network_length();
 
@@ -164,7 +164,7 @@ impl NatActor {
             Ok(())
         })?;
 
-        Self::fn_with_ipv6_mahiro_ip(bpf, |lpm_trie| {
+        Self::fn_with_ipv6_mahiro_ip(bpf, |mut lpm_trie| {
             let addr = mahiro_ipv6_network.address().into();
             let prefix = mahiro_ipv6_network.network_length();
 
@@ -179,7 +179,7 @@ impl NatActor {
     }
 
     fn fn_with_nic_ipv4_map<
-        F: FnOnce(BpfHashMap<MapRefMut, u32, BpfIpv4Addr>) -> anyhow::Result<()>,
+        F: FnOnce(BpfHashMap<&mut MapData, u32, BpfIpv4Addr>) -> anyhow::Result<()>,
     >(
         bpf: &mut Bpf,
         f: F,
@@ -194,7 +194,7 @@ impl NatActor {
     }
 
     fn fn_with_nic_ipv6_map<
-        F: FnOnce(BpfHashMap<MapRefMut, u32, BpfIpv6Addr>) -> anyhow::Result<()>,
+        F: FnOnce(BpfHashMap<&mut MapData, u32, BpfIpv6Addr>) -> anyhow::Result<()>,
     >(
         bpf: &mut Bpf,
         f: F,
@@ -209,7 +209,7 @@ impl NatActor {
     }
 
     fn fn_with_ipv4_mahiro_ip<
-        F: FnOnce(LpmTrie<MapRefMut, BpfIpv4Addr, u8>) -> anyhow::Result<()>,
+        F: FnOnce(LpmTrie<&mut MapData, BpfIpv4Addr, u8>) -> anyhow::Result<()>,
     >(
         bpf: &mut Bpf,
         f: F,
@@ -224,7 +224,7 @@ impl NatActor {
     }
 
     fn fn_with_ipv6_mahiro_ip<
-        F: FnOnce(LpmTrie<MapRefMut, BpfIpv6Addr, u8>) -> anyhow::Result<()>,
+        F: FnOnce(LpmTrie<&mut MapData, BpfIpv6Addr, u8>) -> anyhow::Result<()>,
     >(
         bpf: &mut Bpf,
         f: F,
@@ -287,7 +287,7 @@ impl NatActor {
         for (index, addr) in add_addrs {
             if let Some(addr) = addr.ipv4 {
                 Self::fn_with_nic_ipv4_map(&mut self.bpf, |mut map| {
-                    map.insert(index, addr.into(), 0)
+                    map.insert(index, &addr.into(), 0)
                         .tap_err(|err| error!(%err, index, %addr, "add nic ipv4 addr failed"))?;
 
                     Ok(())
@@ -296,7 +296,7 @@ impl NatActor {
 
             if let Some(addr) = addr.ipv6 {
                 Self::fn_with_nic_ipv6_map(&mut self.bpf, |mut map| {
-                    map.insert(index, addr.into(), 0)
+                    map.insert(index, &addr.into(), 0)
                         .tap_err(|err| error!(%err, index, %addr, "add nic ipv6 addr failed"))?;
 
                     Ok(())

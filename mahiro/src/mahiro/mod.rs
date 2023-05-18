@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use tokio::fs;
+use tokio::task::JoinSet;
+use tokio::{fs, signal};
+use tracing::info;
 
 use self::config::Config;
 use self::encrypt::EncryptActor;
@@ -56,13 +58,24 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
     )
     .await?;
 
-    let udp_actor_task = tokio::spawn(async move { udp_actor.run().await });
-    let encrypt_actor_task = tokio::spawn(async move { encrypt_actor.run().await });
-    let tun_actor_task = tokio::spawn(async move { tun_actor.run().await });
+    let mut join_set = JoinSet::new();
+    join_set.spawn(async move { udp_actor.run().await });
+    join_set.spawn(async move { encrypt_actor.run().await });
+    join_set.spawn(async move { tun_actor.run().await });
 
-    for task in [udp_actor_task, encrypt_actor_task, tun_actor_task] {
-        task.await.unwrap();
+    tokio::select! {
+        _ = join_set.join_next() => {
+            Err(anyhow::anyhow!("actors stopped"))
+        }
+
+        result = signal::ctrl_c() => {
+            result?;
+
+            info!("mahiro stopping");
+
+            join_set.shutdown().await;
+
+            Ok(())
+        }
     }
-
-    Err(anyhow::anyhow!("actors stopped"))
 }

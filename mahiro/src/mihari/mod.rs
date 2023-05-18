@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use tokio::fs;
+use tokio::task::JoinSet;
+use tokio::{fs, signal};
+use tracing::info;
 
 use self::config::Config;
 use self::nat::NatActor;
@@ -57,8 +59,17 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
     )
     .await?;
 
-    let tun_actor_task = tokio::spawn(async move { tun_actor.run().await });
-    let udp_actor_task = tokio::spawn(async move { udp_actor.run().await });
+    let mut join_set = JoinSet::new();
+    join_set.spawn(async move {
+        tun_actor.run().await;
+
+        Ok(())
+    });
+    join_set.spawn(async move {
+        udp_actor.run().await;
+
+        Ok(())
+    });
 
     if bpf_nat {
         let bpf_prog = config
@@ -73,19 +84,22 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
             Path::new(&bpf_prog),
         )?;
 
-        let nat_actor_task = tokio::spawn(async move { nat_actor.run().await });
-
-        tokio::select! {
-            _ = nat_actor_task => {}
-            _ = tun_actor_task => {}
-            _ = udp_actor_task => {}
-        }
-    } else {
-        tokio::select! {
-            _ = tun_actor_task => {}
-            _ = udp_actor_task => {}
-        }
+        join_set.spawn(async move { nat_actor.run().await });
     }
 
-    Err(anyhow::anyhow!("mihari stopped unexpected"))
+    tokio::select! {
+        _ = join_set.join_next() => {
+            Err(anyhow::anyhow!("actors stopped"))
+        }
+
+        result = signal::ctrl_c() => {
+            result?;
+
+            info!("mihari stopping");
+
+            join_set.shutdown().await;
+
+            Ok(())
+        }
+    }
 }

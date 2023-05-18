@@ -38,6 +38,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c99f64d1e06488f620f932677e24bc6e2897582980441ae90a671415bd7ec2f"
+dependencies = [
+ "cfg-if",
+ "once_cell",
+ "version_check",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -110,11 +121,11 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "aya"
 version = "0.11.0"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
+source = "git+https://github.com/aya-rs/aya?rev=1fa1c14#1fa1c142f4073e64d97b33314e60cbc3e33e0a1e"
 dependencies = [
- "bitflags",
+ "aya-obj",
+ "bitflags 2.3.1",
  "bytes",
- "futures",
  "lazy_static",
  "libc",
  "log",
@@ -160,11 +171,11 @@ dependencies = [
 
 [[package]]
 name = "aya-log"
-version = "0.1.11"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
+version = "0.1.13"
+source = "git+https://github.com/aya-rs/aya?rev=1fa1c14#1fa1c142f4073e64d97b33314e60cbc3e33e0a1e"
 dependencies = [
  "aya",
- "aya-log-common 0.1.11",
+ "aya-log-common",
  "bytes",
  "log",
  "thiserror",
@@ -173,19 +184,10 @@ dependencies = [
 
 [[package]]
 name = "aya-log-common"
-version = "0.1.11"
-source = "git+https://github.com/aya-rs/aya?tag=aya-log-v0.1.11#d1ec675122aec07f94e474a4d1c312c3aef3b644"
-dependencies = [
- "aya",
- "num_enum 0.5.11",
-]
-
-[[package]]
-name = "aya-log-common"
 version = "0.1.13"
 source = "git+https://github.com/aya-rs/aya?rev=1fa1c14#1fa1c142f4073e64d97b33314e60cbc3e33e0a1e"
 dependencies = [
- "num_enum 0.6.1",
+ "num_enum",
 ]
 
 [[package]]
@@ -194,7 +196,7 @@ version = "0.1.0"
 source = "git+https://github.com/aya-rs/aya?rev=1fa1c14#1fa1c142f4073e64d97b33314e60cbc3e33e0a1e"
 dependencies = [
  "aya-bpf",
- "aya-log-common 0.1.13",
+ "aya-log-common",
  "aya-log-ebpf-macros",
 ]
 
@@ -203,7 +205,7 @@ name = "aya-log-ebpf-macros"
 version = "0.1.0"
 source = "git+https://github.com/aya-rs/aya?rev=1fa1c14#1fa1c142f4073e64d97b33314e60cbc3e33e0a1e"
 dependencies = [
- "aya-log-common 0.1.13",
+ "aya-log-common",
  "aya-log-parser",
  "proc-macro2",
  "quote",
@@ -215,7 +217,20 @@ name = "aya-log-parser"
 version = "0.1.11-dev.0"
 source = "git+https://github.com/aya-rs/aya?rev=1fa1c14#1fa1c142f4073e64d97b33314e60cbc3e33e0a1e"
 dependencies = [
- "aya-log-common 0.1.13",
+ "aya-log-common",
+]
+
+[[package]]
+name = "aya-obj"
+version = "0.1.0"
+source = "git+https://github.com/aya-rs/aya?rev=1fa1c14#1fa1c142f4073e64d97b33314e60cbc3e33e0a1e"
+dependencies = [
+ "bytes",
+ "core-error",
+ "hashbrown 0.13.2",
+ "log",
+ "object",
+ "thiserror",
 ]
 
 [[package]]
@@ -235,6 +250,12 @@ name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "bitflags"
+version = "2.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6776fc96284a0bb647b615056fc496d1fe1644a7ab01829818a6d91cae888b84"
 
 [[package]]
 name = "blake2"
@@ -356,7 +377,7 @@ checksum = "914c8c79fb560f238ef6429439a30023c862f7a28e688c58f7203f12b29970bd"
 dependencies = [
  "anstream",
  "anstyle",
- "bitflags",
+ "bitflags 1.3.2",
  "clap_lex",
  "strsim",
 ]
@@ -401,6 +422,15 @@ name = "colorchoice"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
+
+[[package]]
+name = "core-error"
+version = "0.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "efcdb2972eb64230b4c50646d8498ff73f5128d196a90c7236eec4cbe8619b8f"
+dependencies = [
+ "version_check",
+]
 
 [[package]]
 name = "core-foundation-sys"
@@ -492,7 +522,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "907076dfda823b0b36d2a1bb5f90c96660a5bbcd7729e10727f07858f22c4edc"
 dependencies = [
  "cfg-if",
- "hashbrown",
+ "hashbrown 0.12.3",
  "lock_api",
  "once_cell",
  "parking_lot_core",
@@ -714,6 +744,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
+name = "hashbrown"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
+dependencies = [
+ "ahash",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -782,7 +821,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
 dependencies = [
  "autocfg",
- "hashbrown",
+ "hashbrown 0.12.3",
  "serde",
 ]
 
@@ -1020,7 +1059,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea993e32c77d87f01236c38f572ecb6c311d592e56a06262a007fd2a6e31253c"
 dependencies = [
  "anyhow",
- "bitflags",
+ "bitflags 1.3.2",
  "byteorder",
  "libc",
  "netlink-packet-core",
@@ -1079,7 +1118,7 @@ version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfdda3d196821d6af13126e40375cdf7da646a96114af134d5f417a9a1dc8e1a"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
  "cfg-if",
  "libc",
  "memoffset 0.7.1",
@@ -1128,31 +1167,11 @@ dependencies = [
 
 [[package]]
 name = "num_enum"
-version = "0.5.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f646caf906c20226733ed5b1374287eb97e3c2a5c227ce668c1f2ce20ae57c9"
-dependencies = [
- "num_enum_derive 0.5.11",
-]
-
-[[package]]
-name = "num_enum"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a015b430d3c108a207fd776d2e2196aaf8b1cf8cf93253e3a097ff3085076a1"
 dependencies = [
- "num_enum_derive 0.6.1",
-]
-
-[[package]]
-name = "num_enum_derive"
-version = "0.5.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcbff9bc912032c62bf65ef1d5aea88983b420f4f839db1e9b0c281a25c9c799"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
+ "num_enum_derive",
 ]
 
 [[package]]
@@ -1168,9 +1187,9 @@ dependencies = [
 
 [[package]]
 name = "object"
-version = "0.29.0"
+version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21158b2c33aa6d4561f1c0a6ea283ca92bc54802a93b263e910746d679a7eb53"
+checksum = "8bda667d9f2b5051b8833f59f3bf748b28ef54f850f4fcb389a252aa383866d1"
 dependencies = [
  "memchr",
 ]
@@ -1407,7 +1426,7 @@ version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb5a58c1855b4b6819d59012155603f0b22ad30cad752600aadfcb695265519a"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
 ]
 
 [[package]]
@@ -1416,7 +1435,7 @@ version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "567664f262709473930a4bf9e51bf2ebf3348f2e748ccc50dea20646858f8f29"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
 ]
 
 [[package]]
@@ -1488,7 +1507,7 @@ version = "0.37.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acf8729d8542766f1b2cf77eb034d52f40d375bb8b615d0b147089946e16613d"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
  "errno",
  "io-lifetimes",
  "libc",
@@ -1610,6 +1629,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "900fba806f70c630b0a382d0d825e17a0f19fcd059a2ade1ff237bcddf446b31"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "signal-hook-registry"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8229b473baa5980ac72ef434c4415e70c4b5e71b423043adb4ba059f89c99a1"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -1801,6 +1829,7 @@ dependencies = [
  "mio",
  "num_cpus",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.48.0",

@@ -7,7 +7,7 @@ build = "build.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "fs"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "fs", "signal"] }
 tokio-stream = { version = "0.1", features = ["time", "io-util"] }
 futures-util = "0.3"
 flume = { version = "0.10", git = "https://github.com/Sherlock-Holo/flume.git", rev = "9824485" }
@@ -26,8 +26,8 @@ rand = "0.8"
 dashmap = "5"
 
 # bpf
-aya = { git = "https://github.com/aya-rs/aya", tag = "aya-log-v0.1.11", features = ["async_tokio"] }
-aya-log = { git = "https://github.com/aya-rs/aya", tag = "aya-log-v0.1.11" }
+aya = { git = "https://github.com/aya-rs/aya", rev = "1fa1c14", features = ["async_tokio"] }
+aya-log = { git = "https://github.com/aya-rs/aya", rev = "1fa1c14" }
 
 # config
 clap = { version = "4", features = ["derive"] }
