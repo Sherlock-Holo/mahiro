@@ -40,6 +40,8 @@ fn init_log(log_level: LogLevel) {
     let level = match log_level {
         LogLevel::Debug => LevelFilter::DEBUG,
         LogLevel::Info => LevelFilter::INFO,
+        LogLevel::Warn => LevelFilter::WARN,
+        LogLevel::Error => LevelFilter::ERROR,
         LogLevel::None => LevelFilter::OFF,
     };
 
