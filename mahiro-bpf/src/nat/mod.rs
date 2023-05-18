@@ -3,6 +3,7 @@ use aya_bpf::helpers::{bpf_l3_csum_replace, bpf_l4_csum_replace};
 use aya_bpf::programs::TcContext;
 use memoffset::offset_of;
 use network_types::eth::EthHdr;
+use network_types::icmp::IcmpHdr;
 use network_types::ip::{Ipv4Hdr, Ipv6Hdr};
 use network_types::tcp::TcpHdr;
 use network_types::udp::UdpHdr;
@@ -19,6 +20,7 @@ pub enum Error {
 pub enum L4Hdr<'a> {
     Tcp(&'a mut TcpHdr),
     Udp(&'a mut UdpHdr),
+    Icmp(&'a mut IcmpHdr),
 }
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
@@ -64,6 +66,7 @@ fn update_l4_csum(
 
             offset + offset_of!(UdpHdr, check)
         }
+        L4Hdr::Icmp(_) => return Ok(()),
     };
 
     unsafe {

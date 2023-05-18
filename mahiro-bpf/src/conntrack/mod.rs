@@ -20,4 +20,5 @@ pub enum ConntrackType {
 pub enum ProtocolType {
     Tcp = 0,
     Udp = 1,
+    Icmp = 2,
 }

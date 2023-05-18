@@ -1,5 +1,6 @@
 #![no_std]
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Sherlock-Holo/mahiro/master/mahiro.svg")]
+#![feature(try_blocks)]
 
 mod conntrack;
 mod context_ext;

@@ -45,41 +45,45 @@ pub fn ipv4_dnat(
     let l4_csum_diff = match port {
         None => None,
         Some(port) => {
-            let mut origin_port = match &l4_hdr {
-                L4Hdr::Tcp(tcp_hdr) => tcp_hdr.dest as __be32,
-                L4Hdr::Udp(udp_hdr) => udp_hdr.dest as __be32,
-            };
+            try {
+                let mut origin_port = match &l4_hdr {
+                    L4Hdr::Tcp(tcp_hdr) => tcp_hdr.dest as __be32,
+                    L4Hdr::Udp(udp_hdr) => udp_hdr.dest as __be32,
+                    L4Hdr::Icmp(_) => None?,
+                };
 
-            let mut new_port = port as __be32;
+                let mut new_port = port as __be32;
 
-            // if l3 has changed, calculate l4 header csum diff need ip csum diff
-            let l3_csum_diff = l3_csum_diff.unwrap_or(0);
+                // if l3 has changed, calculate l4 header csum diff need ip csum diff
+                let l3_csum_diff = l3_csum_diff.unwrap_or(0);
 
-            let csum_diff = unsafe {
-                let csum_diff = bpf_csum_diff(
-                    &mut origin_port as *mut _,
-                    size_of::<__be32>() as _,
-                    &mut new_port as *mut _,
-                    size_of::<__be32>() as _,
-                    l3_csum_diff as _,
-                );
-                if csum_diff < 0 {
-                    return Err(Error::CsumDiffError);
+                let csum_diff = unsafe {
+                    let csum_diff = bpf_csum_diff(
+                        &mut origin_port as *mut _,
+                        size_of::<__be32>() as _,
+                        &mut new_port as *mut _,
+                        size_of::<__be32>() as _,
+                        l3_csum_diff as _,
+                    );
+                    if csum_diff < 0 {
+                        return Err(Error::CsumDiffError);
+                    }
+
+                    csum_diff
+                };
+
+                match &mut l4_hdr {
+                    L4Hdr::Tcp(tcp_hdr) => {
+                        tcp_hdr.dest = port;
+                    }
+                    L4Hdr::Udp(udp_hdr) => {
+                        udp_hdr.dest = port;
+                    }
+                    L4Hdr::Icmp(_) => {}
                 }
 
                 csum_diff
-            };
-
-            match &mut l4_hdr {
-                L4Hdr::Tcp(tcp_hdr) => {
-                    tcp_hdr.dest = port;
-                }
-                L4Hdr::Udp(udp_hdr) => {
-                    udp_hdr.dest = port;
-                }
             }
-
-            Some(csum_diff)
         }
     };
 
@@ -128,41 +132,45 @@ pub fn ipv4_snat(
     let l4_csum_diff = match port {
         None => None,
         Some(port) => {
-            let mut origin_port = match &l4_hdr {
-                L4Hdr::Tcp(tcp_hdr) => tcp_hdr.source as __be32,
-                L4Hdr::Udp(udp_hdr) => udp_hdr.source as __be32,
-            };
+            try {
+                let mut origin_port = match &l4_hdr {
+                    L4Hdr::Tcp(tcp_hdr) => tcp_hdr.source as __be32,
+                    L4Hdr::Udp(udp_hdr) => udp_hdr.source as __be32,
+                    L4Hdr::Icmp(_) => None?,
+                };
 
-            let mut new_port = port as __be32;
+                let mut new_port = port as __be32;
 
-            // if l3 has changed, calculate l4 header csum diff need ip csum diff
-            let l3_csum_diff = l3_csum_diff.unwrap_or(0);
+                // if l3 has changed, calculate l4 header csum diff need ip csum diff
+                let l3_csum_diff = l3_csum_diff.unwrap_or(0);
 
-            let csum_diff = unsafe {
-                let csum_diff = bpf_csum_diff(
-                    &mut origin_port as *mut _,
-                    size_of::<__be32>() as _,
-                    &mut new_port as *mut _,
-                    size_of::<__be32>() as _,
-                    l3_csum_diff as _,
-                );
-                if csum_diff < 0 {
-                    return Err(Error::CsumDiffError);
+                let csum_diff = unsafe {
+                    let csum_diff = bpf_csum_diff(
+                        &mut origin_port as *mut _,
+                        size_of::<__be32>() as _,
+                        &mut new_port as *mut _,
+                        size_of::<__be32>() as _,
+                        l3_csum_diff as _,
+                    );
+                    if csum_diff < 0 {
+                        return Err(Error::CsumDiffError);
+                    }
+
+                    csum_diff
+                };
+
+                match &mut l4_hdr {
+                    L4Hdr::Tcp(tcp_hdr) => {
+                        tcp_hdr.source = port;
+                    }
+                    L4Hdr::Udp(udp_hdr) => {
+                        udp_hdr.source = port;
+                    }
+                    L4Hdr::Icmp(_) => {}
                 }
 
                 csum_diff
-            };
-
-            match &mut l4_hdr {
-                L4Hdr::Tcp(tcp_hdr) => {
-                    tcp_hdr.source = port;
-                }
-                L4Hdr::Udp(udp_hdr) => {
-                    udp_hdr.source = port;
-                }
             }
-
-            Some(csum_diff)
         }
     };
 
