@@ -56,12 +56,12 @@ impl Tun {
         ipv6: Ipv6Inet,
         netlink_handle: Handle,
     ) -> anyhow::Result<Self> {
+        let queue_size = thread::available_parallelism()
+            .unwrap_or(NonZeroUsize::new(4).unwrap())
+            .get()
+            * 4;
         let mut configuration = tun::configure();
-        configuration.name(name.clone()).queues(
-            thread::available_parallelism()
-                .unwrap_or(NonZeroUsize::new(4).unwrap())
-                .into(),
-        );
+        configuration.name(name.clone()).queues(queue_size);
 
         let queues = tun::create_queue_as_async(&configuration)?;
 

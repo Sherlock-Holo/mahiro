@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures_channel::mpsc::Sender;
+use flume::Sender;
 
 use super::message::EncryptMessage;
 use crate::public_key::PublicKey;
@@ -39,10 +39,11 @@ impl PeerStore {
     }
 
     pub fn remove_peer(&self, cookie: &Bytes) {
-        if let Some((_, sender)) = self.0.peer_infos.remove(cookie.as_ref()) {
-            self.0
-                .mahiro_ips
-                .retain(|_, other_sender| !sender.sender.same_receiver(other_sender))
+        if let Some((_, _sender)) = self.0.peer_infos.remove(cookie.as_ref()) {
+            // TODO remove mahiro ip when peer disconnect
+            /*self.0
+            .mahiro_ips
+            .retain(|_, other_sender| !sender.sender.same_receiver(other_sender))*/
         }
     }
 

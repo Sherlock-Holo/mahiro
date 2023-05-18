@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use futures_channel::mpsc;
 use tokio::fs;
 
 use self::config::Config;
@@ -26,8 +25,8 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::spawn(conn);
 
-    let (tun_sender, tun_mailbox) = mpsc::channel(1);
-    let (udp_sender, udp_mailbox) = mpsc::channel(10);
+    let (tun_sender, tun_mailbox) = flume::bounded(64);
+    let (udp_sender, udp_mailbox) = flume::bounded(64);
 
     let peer_store = PeerStore::from(config.peers.into_iter().map(|peer| {
         (
@@ -38,7 +37,7 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
 
     let mut tun_actor = TunActor::new(
         tun_sender.clone(),
-        tun_mailbox,
+        tun_mailbox.into_stream(),
         peer_store.clone(),
         config.local_ipv4,
         config.local_ipv6,
@@ -49,7 +48,7 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
 
     let mut udp_actor = UdpActor::new(
         udp_sender,
-        udp_mailbox,
+        udp_mailbox.into_stream(),
         peer_store,
         tun_sender,
         config.listen_addr,

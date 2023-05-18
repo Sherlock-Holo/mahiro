@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use futures_channel::mpsc;
 use tokio::fs;
 
 use self::config::Config;
@@ -28,14 +27,14 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
         netlink_handle: handle,
     };
 
-    let (encrypt_sender, encrypt_mailbox) = mpsc::channel(10);
-    let (udp_sender, udp_mailbox) = mpsc::channel(10);
-    let (tun_sender, tun_mailbox) = mpsc::channel(1);
+    let (encrypt_sender, encrypt_mailbox) = flume::bounded(64);
+    let (udp_sender, udp_mailbox) = flume::bounded(64);
+    let (tun_sender, tun_mailbox) = flume::bounded(64);
 
     let mut udp_actor = UdpActor::new(
         encrypt_sender.clone(),
         udp_sender.clone(),
-        udp_mailbox,
+        udp_mailbox.into_stream(),
         config.peer_addr,
     )
     .await?;
@@ -43,13 +42,19 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
         udp_sender,
         tun_sender.clone(),
         encrypt_sender.clone(),
-        encrypt_mailbox,
+        encrypt_mailbox.into_stream(),
         config.heartbeat_interval,
         config.local_private_key,
         config.peer_public_key.into(),
     )
     .await?;
-    let mut tun_actor = TunActor::new(encrypt_sender, tun_sender, tun_mailbox, tun_config).await?;
+    let mut tun_actor = TunActor::new(
+        encrypt_sender,
+        tun_sender,
+        tun_mailbox.into_stream(),
+        tun_config,
+    )
+    .await?;
 
     let udp_actor_task = tokio::spawn(async move { udp_actor.run().await });
     let encrypt_actor_task = tokio::spawn(async move { encrypt_actor.run().await });

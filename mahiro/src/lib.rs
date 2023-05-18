@@ -14,7 +14,7 @@ use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{fmt, Registry};
 
-use self::args::{Args, Command};
+use self::args::{Args, Command, LogLevel};
 use self::encrypt::Encrypt;
 
 mod args;
@@ -31,16 +31,16 @@ mod util;
 
 const HEARTBEAT_DATA: &[u8] = b"onimai";
 
-fn init_log(debug: bool) {
+fn init_log(log_level: LogLevel) {
     let layer = fmt::layer()
         .pretty()
         .with_target(true)
         .with_writer(io::stderr);
 
-    let level = if debug {
-        LevelFilter::DEBUG
-    } else {
-        LevelFilter::INFO
+    let level = match log_level {
+        LogLevel::Debug => LevelFilter::DEBUG,
+        LogLevel::Info => LevelFilter::INFO,
+        LogLevel::None => LevelFilter::OFF,
     };
 
     let layered = Registry::default().with(layer).with(level);
@@ -51,7 +51,7 @@ fn init_log(debug: bool) {
 pub async fn run() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    init_log(args.debug);
+    init_log(args.log);
 
     match args.command {
         Command::Mahiro { config } => mahiro::run(Path::new(&config)).await,

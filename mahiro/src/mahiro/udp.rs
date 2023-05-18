@@ -2,21 +2,25 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::BytesMut;
-use futures_channel::mpsc::{Receiver, Sender};
-use futures_util::{SinkExt, StreamExt};
+use derivative::Derivative;
+use flume::{Sender, TrySendError};
+use futures_util::StreamExt;
 use prost::Message as _;
 use tap::TapFallible;
 use tokio::net::{self, ToSocketAddrs, UdpSocket};
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::message::EncryptMessage;
 use super::message::UdpMessage as Message;
 use crate::protocol::Frame;
+use crate::util::Receiver;
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct UdpActor {
     mailbox_sender: Sender<Message>,
+    #[derivative(Debug = "ignore")]
     mailbox: Receiver<Message>,
     encrypt_sender: Sender<EncryptMessage>,
 
@@ -82,7 +86,7 @@ impl UdpActor {
         Ok(())
     }
 
-    async fn read_from_udp(udp_socket: Arc<UdpSocket>, mut sender: Sender<Message>) {
+    async fn read_from_udp(udp_socket: Arc<UdpSocket>, sender: Sender<Message>) {
         let mut buf = BytesMut::with_capacity(1500 * 4);
         loop {
             buf.reserve(1500);
@@ -91,7 +95,7 @@ impl UdpActor {
                 Err(err) => {
                     error!(%err, "receive udp socket failed");
 
-                    let _ = sender.send(Message::Packet(Err(err))).await;
+                    let _ = sender.try_send(Message::Packet(Err(err)));
 
                     return;
                 }
@@ -99,10 +103,18 @@ impl UdpActor {
                 Ok(_) => buf.split().freeze(),
             };
 
-            if let Err(err) = sender.send(Message::Packet(Ok(packet))).await {
-                error!(%err, "send packet failed");
+            match sender.try_send(Message::Packet(Ok(packet))) {
+                Err(TrySendError::Full(_)) => {
+                    warn!("encrypt actor mailbox full");
+                }
 
-                return;
+                Err(err) => {
+                    error!(%err, "send packet failed");
+
+                    return;
+                }
+
+                Ok(_) => {}
             }
         }
     }
@@ -169,12 +181,21 @@ impl UdpActor {
                     }
                 };
 
-                self.encrypt_sender
-                    .send(EncryptMessage::Frame(frame))
-                    .await
-                    .tap_err(|err| error!(%err, "send frame to encrypt failed"))?;
+                match self.encrypt_sender.try_send(EncryptMessage::Frame(frame)) {
+                    Err(TrySendError::Full(_)) => {
+                        warn!("encrypt actor mailbox is full");
 
-                Ok(())
+                        Ok(())
+                    }
+
+                    Err(err) => {
+                        error!(%err, "send frame to encrypt failed");
+
+                        Err(err.into())
+                    }
+
+                    Ok(_) => Ok(()),
+                }
             }
         }
     }
@@ -183,8 +204,7 @@ impl UdpActor {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures_channel::mpsc;
-    use futures_util::StreamExt;
+    use futures_util::{SinkExt, StreamExt};
     use test_log::test;
 
     use super::*;
@@ -196,12 +216,20 @@ mod tests {
         let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let addr = server.local_addr().unwrap();
 
-        let (encrypt_sender, mut encrypt_mailbox) = mpsc::channel(10);
-        let (mut mailbox_sender, mailbox) = mpsc::channel(10);
-        let mut udp_actor = UdpActor::new(encrypt_sender, mailbox_sender.clone(), mailbox, addr)
-            .await
-            .unwrap();
+        let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
+        let (mailbox_sender, mailbox) = flume::bounded(10);
+        let mut udp_actor = UdpActor::new(
+            encrypt_sender,
+            mailbox_sender.clone(),
+            mailbox.into_stream(),
+            addr,
+        )
+        .await
+        .unwrap();
         tokio::spawn(async move { udp_actor.run().await });
+
+        let mut encrypt_mailbox = encrypt_mailbox.into_stream();
+        let mut mailbox_sender = mailbox_sender.into_sink();
 
         let cookie = generate_cookie();
         let frame = Frame {
