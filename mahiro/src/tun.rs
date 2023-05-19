@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread;
 
-use cidr::{Ipv4Inet, Ipv6Inet};
 use derivative::Derivative;
 use futures_util::TryStreamExt;
+use ipnet::{Ipv4Net, Ipv6Net};
 use netlink_packet_route::nlas::link::Nla;
 use rtnetlink::Handle;
 use tap::TapFallible;
@@ -22,8 +22,8 @@ const MTU: u32 = 1280;
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Tun {
-    ipv4: Ipv4Inet,
-    ipv6: Ipv6Inet,
+    ipv4: Ipv4Net,
+    ipv6: Ipv6Net,
     name: String,
     #[derivative(Debug = "ignore")]
     queues: Vec<AsyncQueue>,
@@ -32,8 +32,8 @@ pub struct Tun {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct TunReader {
-    ipv4: Ipv4Inet,
-    ipv6: Ipv6Inet,
+    ipv4: Ipv4Net,
+    ipv6: Ipv6Net,
     name: Arc<str>,
     #[derivative(Debug = "ignore")]
     queue: ReadHalf<AsyncQueue>,
@@ -42,8 +42,8 @@ pub struct TunReader {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct TunWriter {
-    ipv4: Ipv4Inet,
-    ipv6: Ipv6Inet,
+    ipv4: Ipv4Net,
+    ipv6: Ipv6Net,
     name: Arc<str>,
     #[derivative(Debug = "ignore")]
     queue: WriteHalf<AsyncQueue>,
@@ -52,8 +52,8 @@ pub struct TunWriter {
 impl Tun {
     pub async fn new(
         name: String,
-        ipv4: Ipv4Inet,
-        ipv6: Ipv6Inet,
+        ipv4: Ipv4Net,
+        ipv6: Ipv6Net,
         netlink_handle: Handle,
     ) -> anyhow::Result<Self> {
         let queue_size = thread::available_parallelism()
@@ -102,8 +102,8 @@ impl Tun {
 
     async fn setup_device(
         name: &str,
-        ipv4: Ipv4Inet,
-        ipv6: Ipv6Inet,
+        ipv4: Ipv4Net,
+        ipv6: Ipv6Net,
         netlink_handle: Handle,
     ) -> anyhow::Result<()> {
         let mut link_handle = netlink_handle.link();
@@ -123,12 +123,12 @@ impl Tun {
 
         let address_handle = netlink_handle.address();
         address_handle
-            .add(tun_index, IpAddr::V4(ipv4.address()), ipv4.network_length())
+            .add(tun_index, IpAddr::V4(ipv4.addr()), ipv4.prefix_len())
             .execute()
             .await
             .tap_err(|err| error!(%err, "add ipv4 addr failed"))?;
         address_handle
-            .add(tun_index, IpAddr::V6(ipv6.address()), ipv6.network_length())
+            .add(tun_index, IpAddr::V6(ipv6.addr()), ipv6.prefix_len())
             .execute()
             .await
             .tap_err(|err| error!(%err, "addr ipv6 addr failed"))?;

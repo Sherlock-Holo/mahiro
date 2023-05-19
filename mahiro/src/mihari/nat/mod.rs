@@ -11,9 +11,9 @@ use aya::programs::tc::SchedClassifierLink;
 use aya::programs::{tc, Link, SchedClassifier, TcAttachType};
 use aya::Bpf;
 use aya_log::BpfLogger;
-use cidr::{Ipv4Inet, Ipv6Inet};
 use derivative::Derivative;
 use futures_util::{stream, StreamExt, TryStreamExt};
+use ipnet::{Ipv4Net, Ipv6Net};
 use netlink_packet_route::address::Nla;
 use netlink_packet_route::link::nlas::Nla as LinkNla;
 use rtnetlink::{AddressHandle, Handle, LinkHandle};
@@ -46,16 +46,16 @@ pub struct NatActor {
     link_handle: LinkHandle,
     #[derivative(Debug = "ignore")]
     addr_handle: AddressHandle,
-    mahiro_ipv4_network: Ipv4Inet,
-    mahiro_ipv6_network: Ipv6Inet,
+    mahiro_ipv4_network: Ipv4Net,
+    mahiro_ipv6_network: Ipv6Net,
     watch_nic_list: HashSet<String>,
 }
 
 impl NatActor {
     pub fn new(
         netlink_handle: Handle,
-        mahiro_ipv4_network: Ipv4Inet,
-        mahiro_ipv6_network: Ipv6Inet,
+        mahiro_ipv4_network: Ipv4Net,
+        mahiro_ipv6_network: Ipv6Net,
         watch_nic_list: HashSet<String>,
         bpf_prog: &Path,
     ) -> anyhow::Result<Self> {
@@ -148,12 +148,12 @@ impl NatActor {
 
     fn set_bpf_map(
         bpf: &mut Bpf,
-        mahiro_ipv4_network: Ipv4Inet,
-        mahiro_ipv6_network: Ipv6Inet,
+        mahiro_ipv4_network: Ipv4Net,
+        mahiro_ipv6_network: Ipv6Net,
     ) -> anyhow::Result<()> {
         Self::fn_with_ipv4_mahiro_ip(bpf, |mut lpm_trie| {
-            let addr = mahiro_ipv4_network.address().into();
-            let prefix = mahiro_ipv4_network.network_length();
+            let addr = mahiro_ipv4_network.addr().into();
+            let prefix = mahiro_ipv4_network.prefix_len();
 
             lpm_trie
                 .insert(&Key::new(prefix as _, addr), 1, 0)
@@ -165,8 +165,8 @@ impl NatActor {
         })?;
 
         Self::fn_with_ipv6_mahiro_ip(bpf, |mut lpm_trie| {
-            let addr = mahiro_ipv6_network.address().into();
-            let prefix = mahiro_ipv6_network.network_length();
+            let addr = mahiro_ipv6_network.addr().into();
+            let prefix = mahiro_ipv6_network.prefix_len();
 
             lpm_trie
                 .insert(&Key::new(prefix as _, addr), 1, 0)

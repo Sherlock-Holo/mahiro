@@ -41,7 +41,7 @@ base64 = "0.21"
 tun = { version = "0.5", features = ["async"], git = "https://github.com/Sherlock-Holo/rust-tun.git", branch = "master" }
 rtnetlink = "0.12"
 netlink-packet-route = "0.15"
-cidr = "0.2"
+ipnet = "2"
 network-types = "0.0"
 
 # transport data

@@ -4,7 +4,7 @@ use std::time::Duration;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Bytes;
-use cidr::{Ipv4Inet, Ipv6Inet};
+use ipnet::{Ipv4Net, Ipv6Net};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 use serde_with::{serde_as, DisplayFromStr};
@@ -20,9 +20,9 @@ pub struct Config {
     pub peers: Vec<Peer>,
 
     #[serde_as(as = "DisplayFromStr")]
-    pub local_ipv4: Ipv4Inet,
+    pub local_ipv4: Ipv4Net,
     #[serde_as(as = "DisplayFromStr")]
-    pub local_ipv6: Ipv6Inet,
+    pub local_ipv6: Ipv6Net,
 
     pub listen_addr: SocketAddr,
 

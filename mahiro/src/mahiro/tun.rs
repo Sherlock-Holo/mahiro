@@ -2,11 +2,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::BytesMut;
-use cidr::{Ipv4Inet, Ipv6Inet};
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
 use futures_util::task::noop_waker_ref;
 use futures_util::StreamExt;
+use ipnet::{Ipv4Net, Ipv6Net};
 use rtnetlink::Handle;
 use tap::TapFallible;
 use tokio::io::{AsyncReadExt, AsyncWrite};
@@ -22,8 +22,8 @@ use crate::util::Receiver;
 
 #[derive(Debug)]
 pub struct TunConfig {
-    pub tun_ipv4: Ipv4Inet,
-    pub tun_ipv6: Ipv6Inet,
+    pub tun_ipv4: Ipv4Net,
+    pub tun_ipv6: Ipv6Net,
     pub tun_name: String,
     pub netlink_handle: Handle,
 }
@@ -268,8 +268,8 @@ mod tests {
         tokio::spawn(connection);
 
         let tun_config = TunConfig {
-            tun_ipv4: Ipv4Inet::new(Ipv4Addr::new(192, 168, 1, 1), 24).unwrap(),
-            tun_ipv6: Ipv6Inet::new(Ipv6Addr::from_str("fc00:100::1").unwrap(), 64).unwrap(),
+            tun_ipv4: Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 1), 24).unwrap(),
+            tun_ipv6: Ipv6Net::new(Ipv6Addr::from_str("fc00:100::1").unwrap(), 64).unwrap(),
             tun_name: "test_tun".to_string(),
             netlink_handle: handle,
         };

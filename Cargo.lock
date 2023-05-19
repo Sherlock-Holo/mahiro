@@ -852,6 +852,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c429fffa658f288669529fc26565f728489a2e39bc7b24a428aaaf51355182e"
 
 [[package]]
+name = "ipnet"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12b6ee2129af8d4fb011108c73d99a1b83a85977f23b82460c0ae2e25bb4b57f"
+
+[[package]]
 name = "is-terminal"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -939,13 +945,13 @@ dependencies = [
  "aya-log",
  "base64 0.21.0",
  "bytes",
- "cidr",
  "clap",
  "dashmap",
  "derivative",
  "flume",
  "futures-util",
  "humantime",
+ "ipnet",
  "netlink-packet-route",
  "network-types",
  "nix",

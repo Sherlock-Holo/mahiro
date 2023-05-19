@@ -3,11 +3,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::BytesMut;
-use cidr::{Ipv4Inet, Ipv6Inet};
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
 use futures_util::task::noop_waker_ref;
 use futures_util::StreamExt;
+use ipnet::{Ipv4Net, Ipv6Net};
 use rtnetlink::Handle;
 use tap::TapFallible;
 use tokio::io::{AsyncReadExt, AsyncWrite};
@@ -30,8 +30,8 @@ pub struct TunActor {
     mailbox: Receiver<Message>,
     peer_store: PeerStore,
 
-    tun_ipv4: Ipv4Inet,
-    tun_ipv6: Ipv6Inet,
+    tun_ipv4: Ipv4Net,
+    tun_ipv6: Ipv6Net,
     tun_name: String,
     netlink_handle: Handle,
 
@@ -44,8 +44,8 @@ impl TunActor {
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
         peer_store: PeerStore,
-        tun_ipv4: Ipv4Inet,
-        tun_ipv6: Ipv6Inet,
+        tun_ipv4: Ipv4Net,
+        tun_ipv6: Ipv6Net,
         tun_name: String,
         netlink_handle: Handle,
     ) -> anyhow::Result<Self> {
@@ -67,8 +67,8 @@ impl TunActor {
 
     #[instrument(err)]
     async fn start(
-        tun_ipv4: Ipv4Inet,
-        tun_ipv6: Ipv6Inet,
+        tun_ipv4: Ipv4Net,
+        tun_ipv6: Ipv6Net,
         tun_name: String,
         netlink_handle: Handle,
     ) -> anyhow::Result<(Vec<TunWriter>, Vec<TunReader>)> {
