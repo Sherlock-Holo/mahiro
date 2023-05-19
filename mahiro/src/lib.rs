@@ -25,6 +25,7 @@ mod mahiro;
 mod mihari;
 mod protocol;
 mod public_key;
+mod register_buffer;
 mod timestamp;
 mod tun;
 mod util;
