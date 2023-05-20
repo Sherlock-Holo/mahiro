@@ -1,49 +1,22 @@
 use core::ffi::c_long;
 use core::mem::size_of_val;
 
-use aya_bpf::bindings::xdp_action::XDP_PASS;
 use aya_bpf::bindings::{
     __be32, __u32, __u8, bpf_fib_lookup, bpf_fib_lookup__bindgen_ty_1,
     bpf_fib_lookup__bindgen_ty_2, bpf_fib_lookup__bindgen_ty_3, bpf_fib_lookup__bindgen_ty_4,
     BPF_FIB_LKUP_RET_SUCCESS, BPF_FIB_LOOKUP_DIRECT,
 };
-use aya_bpf::helpers::{bpf_fib_lookup, bpf_redirect};
-use aya_bpf::programs::XdpContext;
+use aya_bpf::helpers::bpf_fib_lookup;
+use aya_bpf::programs::TcContext;
 use aya_log_ebpf::{debug, error};
 use network_types::ip::{Ipv4Hdr, Ipv6Hdr};
-
-use crate::context_ext::ContextExt;
 
 const AF_INET: __u8 = 2;
 const AF_INET6: __u8 = 10;
 const IPV6_FLOWINFO_MASK: __be32 = 0x0FFFFFFFu32.to_be();
 
-pub fn redirect_route(ctx: XdpContext) -> Result<u32, ()> {
-    let iface_index = get_egress_iface_index_from_tun(&ctx)?;
-    match iface_index {
-        None => Ok(XDP_PASS),
-        Some(index) => unsafe { Ok(bpf_redirect(index, 0) as _) },
-    }
-}
-
-fn get_egress_iface_index_from_tun(ctx: &XdpContext) -> Result<Option<__u32>, ()> {
-    let ipv4hdr = ctx.load_ptr::<Ipv4Hdr>(0).ok_or(())?;
-
-    if ipv4hdr.version() == 4 {
-        get_egress_iface_index_from_tun_ipv4(ctx, ipv4hdr)
-    } else if ipv4hdr.version() == 6 {
-        // actually that is ipv6 packet, need use ipv6 hdr
-        let ipv6hdr = ctx.load_ptr::<Ipv6Hdr>(0).ok_or(())?;
-
-        get_egress_iface_index_from_tun_ipv6(ctx, ipv6hdr)
-    } else {
-        // unknown packet, let it go...
-        Ok(None)
-    }
-}
-
-fn get_egress_iface_index_from_tun_ipv4(
-    ctx: &XdpContext,
+pub fn get_egress_iface_index_from_tun_ipv4(
+    ctx: &TcContext,
     ipv4hdr: &mut Ipv4Hdr,
 ) -> Result<Option<__u32>, ()> {
     let mut fib_lookup = bpf_fib_lookup {
@@ -54,7 +27,7 @@ fn get_egress_iface_index_from_tun_ipv4(
         __bindgen_anon_1: bpf_fib_lookup__bindgen_ty_1 {
             tot_len: u16::from_be(ipv4hdr.tot_len),
         },
-        ifindex: unsafe { (*ctx.ctx).ingress_ifindex },
+        ifindex: unsafe { (*ctx.skb.skb).ingress_ifindex },
         __bindgen_anon_2: bpf_fib_lookup__bindgen_ty_2 { tos: ipv4hdr.tos },
         __bindgen_anon_3: bpf_fib_lookup__bindgen_ty_3 {
             ipv4_src: ipv4hdr.src_addr,
@@ -70,7 +43,7 @@ fn get_egress_iface_index_from_tun_ipv4(
 
     let result = unsafe {
         bpf_fib_lookup(
-            ctx.ctx as _,
+            ctx.skb.skb as _,
             &mut fib_lookup as *mut _,
             size_of_val(&fib_lookup) as _,
             BPF_FIB_LOOKUP_DIRECT,
@@ -105,8 +78,8 @@ fn get_egress_iface_index_from_tun_ipv4(
     Ok(None)
 }
 
-fn get_egress_iface_index_from_tun_ipv6(
-    ctx: &XdpContext,
+pub fn get_egress_iface_index_from_tun_ipv6(
+    ctx: &TcContext,
     ipv6hdr: &mut Ipv6Hdr,
 ) -> Result<Option<__u32>, ()> {
     let mut fib_lookup = unsafe {
@@ -118,7 +91,7 @@ fn get_egress_iface_index_from_tun_ipv6(
             __bindgen_anon_1: bpf_fib_lookup__bindgen_ty_1 {
                 tot_len: u16::from_be(ipv6hdr.payload_len),
             },
-            ifindex: (*ctx.ctx).ingress_ifindex,
+            ifindex: (*ctx.skb.skb).ingress_ifindex,
             __bindgen_anon_2: bpf_fib_lookup__bindgen_ty_2 {
                 flowinfo: *(ipv6hdr as *mut _ as *mut __be32) & IPV6_FLOWINFO_MASK,
             },
@@ -137,7 +110,7 @@ fn get_egress_iface_index_from_tun_ipv6(
 
     let result = unsafe {
         bpf_fib_lookup(
-            ctx.ctx as _,
+            ctx.skb.skb as _,
             &mut fib_lookup as *mut _,
             size_of_val(&fib_lookup) as _,
             BPF_FIB_LOOKUP_DIRECT,

@@ -11,6 +11,7 @@ use aya::programs::{tc, SchedClassifier, TcAttachType};
 use aya::Bpf;
 use aya_log::BpfLogger;
 use derivative::Derivative;
+use either::Either;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use ipnet::{Ipv4Net, Ipv6Net};
 use netlink_packet_route::address::Nla;
@@ -29,6 +30,7 @@ mod ip_addr;
 
 const SNAT_EGRESS: &str = "snat_egress";
 const DNAT_INGRESS: &str = "dnat_ingress";
+const REDIRECT_ROUTE: &str = "redirect_route";
 const NIC_IPV4_MAP: &str = "NIC_IPV4_MAP";
 const NIC_IPV6_MAP: &str = "NIC_IPV4_MAP";
 const IPV4_MAHIRO_IP: &str = "IPV4_MAHIRO_IP";
@@ -57,27 +59,42 @@ impl NatActor {
         mahiro_ipv4_network: Ipv4Net,
         mahiro_ipv6_network: Ipv6Net,
         watch_nic_list: HashSet<String>,
+        bpf_forward: bool,
+        mihari_nic: &str,
         mut bpf: Bpf,
     ) -> anyhow::Result<Self> {
         init_bpf_log(&mut bpf);
 
         Self::set_bpf_map(&mut bpf, mahiro_ipv4_network, mahiro_ipv6_network)?;
 
-        for nic in &watch_nic_list {
-            match tc::qdisc_add_clsact(nic) {
-                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+        {
+            let watch_nic_list = watch_nic_list.iter().map(|nic| nic.as_str());
+            let watch_nic_list = if bpf_forward {
+                Either::Left(watch_nic_list.chain([mihari_nic]))
+            } else {
+                Either::Right(watch_nic_list)
+            };
 
-                Err(err) => {
-                    error!(%err, %nic, "set qdisc failed");
+            for nic in watch_nic_list {
+                match tc::qdisc_add_clsact(nic) {
+                    Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
 
-                    return Err(err.into());
+                    Err(err) => {
+                        error!(%err, %nic, "set nic qdisc failed");
+
+                        return Err(err.into());
+                    }
+
+                    Ok(_) => {}
                 }
-
-                Ok(_) => {}
             }
         }
 
-        let attached_bpf_programs = Self::attach_nic(&mut bpf, &watch_nic_list)?;
+        let mut attached_bpf_programs = Self::attach_nic(&mut bpf, &watch_nic_list)?;
+        if bpf_forward {
+            let redirect_route_link = Self::attach_redirect_route_nic(&mut bpf, mihari_nic)?;
+            attached_bpf_programs.insert(mihari_nic.to_string(), vec![redirect_route_link]);
+        }
 
         Ok(Self {
             nic_addrs: Default::default(),
@@ -140,6 +157,30 @@ impl NatActor {
         }
 
         Ok(attached_bpf_programs)
+    }
+
+    fn attach_redirect_route_nic(
+        bpf: &mut Bpf,
+        mihari_nic: &str,
+    ) -> anyhow::Result<OwnedLink<SchedClassifierLink>> {
+        let redirect_route_prog: &mut SchedClassifier = bpf
+            .program_mut(REDIRECT_ROUTE)
+            .expect("redirect route bpf program miss")
+            .try_into()
+            .tap_err(|err| error!(%err, "get sched classifier program failed"))?;
+        redirect_route_prog
+            .load()
+            .tap_err(|err| error!(%err, "load redirect route bpf program failed"))?;
+
+        let link_id = redirect_route_prog
+            .attach(mihari_nic, TcAttachType::Ingress)
+            .tap_err(|err| error!(%err, mihari_nic, "attach redirect route bpf program failed"))?;
+        let link = redirect_route_prog
+            .take_link(link_id)
+            .tap_err(|err| error!(%err, "redirect route bpf take link failed"))?;
+        let link = OwnedLink::from(link);
+
+        Ok(link)
     }
 
     fn set_bpf_map(

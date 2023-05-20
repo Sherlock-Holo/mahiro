@@ -19,7 +19,6 @@ mod encrypt;
 mod message;
 mod nat;
 mod peer_store;
-mod redirect_forward;
 mod tun;
 mod udp;
 
@@ -74,22 +73,14 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
         Ok(())
     });
 
-    // make sure xdp redirect forward detach when mihari stop
-    let mut xdp_redirect_forward = None;
     if bpf_nat || bpf_forward {
         let bpf_prog = config
             .bpf_prog
             .ok_or_else(|| anyhow::anyhow!("bpf prog not set"))?;
 
-        let mut bpf = Bpf::load_file(&bpf_prog).tap_err(|err| {
+        let bpf = Bpf::load_file(&bpf_prog).tap_err(|err| {
             error!(%err, ?bpf_prog, "load bpf failed");
         })?;
-
-        if bpf_forward {
-            let xdp_redirect_forward_link =
-                redirect_forward::enable_xdp_redirect_forward(&mut bpf, &config.tun_name)?;
-            xdp_redirect_forward.replace(xdp_redirect_forward_link);
-        }
 
         if bpf_nat {
             let mut nat_actor = NatActor::new(
@@ -97,6 +88,8 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
                 config.local_ipv4,
                 config.local_ipv6,
                 HashSet::from_iter(config.nic_list.unwrap_or_default()),
+                bpf_forward,
+                &config.tun_name,
                 bpf,
             )?;
 
