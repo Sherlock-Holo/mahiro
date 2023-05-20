@@ -57,7 +57,11 @@ pub async fn run() -> anyhow::Result<()> {
 
     match args.command {
         Command::Mahiro { config } => mahiro::run(Path::new(&config)).await,
-        Command::Mihari { config, bpf_nat } => mihari::run(Path::new(&config), bpf_nat).await,
+        Command::Mihari {
+            config,
+            bpf_nat,
+            bpf_forward,
+        } => mihari::run(Path::new(&config), bpf_nat, bpf_forward).await,
         Command::Genkey { private, public } => generate_keypair(&private, &public).await,
     }
 }

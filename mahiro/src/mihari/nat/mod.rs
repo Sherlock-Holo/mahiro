@@ -2,13 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::future;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::path::Path;
 use std::time::Duration;
 
 use aya::maps::lpm_trie::{Key, LpmTrie};
 use aya::maps::{HashMap as BpfHashMap, MapData, MapError};
 use aya::programs::tc::SchedClassifierLink;
-use aya::programs::{tc, Link, SchedClassifier, TcAttachType};
+use aya::programs::{tc, SchedClassifier, TcAttachType};
 use aya::Bpf;
 use aya_log::BpfLogger;
 use derivative::Derivative;
@@ -24,6 +23,7 @@ use tracing::error;
 use tracing_log::LogTracer;
 
 use self::ip_addr::{BpfIpv4Addr, BpfIpv6Addr};
+use crate::util::OwnedLink;
 
 mod ip_addr;
 
@@ -39,7 +39,7 @@ const WATCH_INTERVAL: Duration = Duration::from_secs(5);
 #[derivative(Debug)]
 pub struct NatActor {
     nic_addrs: HashMap<u32, NicAddr>,
-    attached_bpf_programs: HashMap<String, Vec<OwnedSchedClassifierLink>>,
+    attached_bpf_programs: HashMap<String, Vec<OwnedLink<SchedClassifierLink>>>,
 
     bpf: Bpf,
     #[derivative(Debug = "ignore")]
@@ -57,12 +57,8 @@ impl NatActor {
         mahiro_ipv4_network: Ipv4Net,
         mahiro_ipv6_network: Ipv6Net,
         watch_nic_list: HashSet<String>,
-        bpf_prog: &Path,
+        mut bpf: Bpf,
     ) -> anyhow::Result<Self> {
-        let mut bpf = Bpf::load_file(bpf_prog).tap_err(|err| {
-            error!(%err, ?bpf_prog, "load bpf failed");
-        })?;
-
         init_bpf_log(&mut bpf);
 
         Self::set_bpf_map(&mut bpf, mahiro_ipv4_network, mahiro_ipv6_network)?;
@@ -98,7 +94,7 @@ impl NatActor {
     fn attach_nic(
         bpf: &mut Bpf,
         watch_nic_list: &HashSet<String>,
-    ) -> anyhow::Result<HashMap<String, Vec<OwnedSchedClassifierLink>>> {
+    ) -> anyhow::Result<HashMap<String, Vec<OwnedLink<SchedClassifierLink>>>> {
         let mut attached_bpf_programs = HashMap::with_capacity(watch_nic_list.len() * 2);
 
         let snat_egress_prog: &mut SchedClassifier = bpf
@@ -117,7 +113,7 @@ impl NatActor {
             let link = snat_egress_prog
                 .take_link(link_id)
                 .tap_err(|err| error!(%err, "snat egress bpf take link failed"))?;
-            let link = OwnedSchedClassifierLink::from(link);
+            let link = OwnedLink::from(link);
 
             attached_bpf_programs.insert(nic.clone(), vec![link]);
         }
@@ -138,7 +134,7 @@ impl NatActor {
             let link = dnat_ingress_prog
                 .take_link(link_id)
                 .tap_err(|err| error!(%err, "dnat ingress bpf take link failed"))?;
-            let link = OwnedSchedClassifierLink::from(link);
+            let link = OwnedLink::from(link);
 
             attached_bpf_programs.get_mut(nic).unwrap().push(link);
         }
@@ -427,21 +423,6 @@ impl NatActor {
             })
             .try_collect()
             .await
-    }
-}
-
-#[derive(Debug)]
-struct OwnedSchedClassifierLink(Option<SchedClassifierLink>);
-
-impl From<SchedClassifierLink> for OwnedSchedClassifierLink {
-    fn from(value: SchedClassifierLink) -> Self {
-        Self(Some(value))
-    }
-}
-
-impl Drop for OwnedSchedClassifierLink {
-    fn drop(&mut self) {
-        let _ = self.0.take().unwrap().detach();
     }
 }
 
