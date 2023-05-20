@@ -74,6 +74,8 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
         Ok(())
     });
 
+    // make sure xdp redirect forward detach when mihari stop
+    let mut xdp_redirect_forward = None;
     if bpf_nat || bpf_forward {
         let bpf_prog = config
             .bpf_prog
@@ -84,7 +86,9 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
         })?;
 
         if bpf_forward {
-            redirect_forward::enable_xdp_redirect_forward(&mut bpf, &config.tun_name)?;
+            let xdp_redirect_forward_link =
+                redirect_forward::enable_xdp_redirect_forward(&mut bpf, &config.tun_name)?;
+            xdp_redirect_forward.replace(xdp_redirect_forward_link);
         }
 
         if bpf_nat {
