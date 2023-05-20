@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use aya::Bpf;
+use tap::TapFallible;
 use tokio::task::JoinSet;
 use tokio::{fs, signal};
-use tracing::info;
+use tracing::{error, info};
 
 use self::config::Config;
 use self::nat::NatActor;
@@ -20,7 +22,7 @@ mod peer_store;
 mod tun;
 mod udp;
 
-pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
+pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Result<()> {
     let config_data = fs::read(config).await?;
     let config = serde_yaml::from_slice::<Config>(&config_data)?;
 
@@ -43,7 +45,7 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
         peer_store.clone(),
         config.local_ipv4,
         config.local_ipv6,
-        config.tun_name,
+        config.tun_name.clone(),
         handle.clone(),
     )
     .await?;
@@ -71,20 +73,28 @@ pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
         Ok(())
     });
 
-    if bpf_nat {
+    if bpf_nat || bpf_forward {
         let bpf_prog = config
             .bpf_prog
             .ok_or_else(|| anyhow::anyhow!("bpf prog not set"))?;
 
-        let mut nat_actor = NatActor::new(
-            handle,
-            config.local_ipv4,
-            config.local_ipv6,
-            HashSet::from_iter(config.nic_list.unwrap_or_default()),
-            Path::new(&bpf_prog),
-        )?;
+        let bpf = Bpf::load_file(&bpf_prog).tap_err(|err| {
+            error!(%err, ?bpf_prog, "load bpf failed");
+        })?;
 
-        join_set.spawn(async move { nat_actor.run().await });
+        if bpf_nat {
+            let mut nat_actor = NatActor::new(
+                handle,
+                config.local_ipv4,
+                config.local_ipv6,
+                HashSet::from_iter(config.nic_list.unwrap_or_default()),
+                bpf_forward,
+                &config.tun_name,
+                bpf,
+            )?;
+
+            join_set.spawn(async move { nat_actor.run().await });
+        }
     }
 
     tokio::select! {

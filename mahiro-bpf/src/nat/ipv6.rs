@@ -1,9 +1,9 @@
 use core::mem::size_of;
 
 use aya_bpf::bindings::{__be16, __be32, __s64, TC_ACT_OK};
-use aya_bpf::bpf_printk;
 use aya_bpf::helpers::bpf_csum_diff;
 use aya_bpf::programs::TcContext;
+use aya_log_ebpf::debug;
 use network_types::ip::Ipv6Hdr;
 
 use super::{update_l4_csum, Error, IpAddrType, L4Hdr};
@@ -72,9 +72,7 @@ pub fn ipv6_dnat(
 
     update_csum(ctx, l3_csum_diff, l4_csum_diff, l4_hdr)?;
 
-    unsafe {
-        bpf_printk!(b"ipv6 dnat change done");
-    }
+    debug!(ctx, "ipv6 dnat change done");
 
     Ok(TC_ACT_OK)
 }
@@ -142,9 +140,7 @@ pub fn ipv6_snat(
 
     update_csum(ctx, l3_csum_diff, l4_csum_diff, l4_hdr)?;
 
-    unsafe {
-        bpf_printk!(b"ipv6 snat change done");
-    }
+    debug!(ctx, "ipv6 snat change done");
 
     Ok(TC_ACT_OK)
 }

@@ -48,8 +48,12 @@ pub enum Command {
         config: String,
 
         /// enable bpf mode nat
-        #[arg(short, long)]
+        #[arg(long)]
         bpf_nat: bool,
+
+        /// enable bpf packet redirect forward
+        #[arg(long)]
+        bpf_forward: bool,
     },
 
     Genkey {

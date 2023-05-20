@@ -7,9 +7,6 @@ use crate::context_ext::ContextExt;
 mod ipv4;
 mod ipv6;
 
-const MAX_LOCAL_IP_RULE_SIZE: u32 = 65535;
-const NIC_IP_MAP_SIZE: u32 = 128;
-
 pub fn egress(ctx: TcContext) -> Result<i32, ()> {
     let eth_hdr = ctx.load_ptr::<EthHdr>(0).ok_or(())?;
     match eth_hdr.ether_type {

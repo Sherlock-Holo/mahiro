@@ -1,8 +1,6 @@
-use aya_bpf::bindings::{BPF_F_NO_PREALLOC, TC_ACT_OK, TC_ACT_SHOT};
+use aya_bpf::bindings::{TC_ACT_OK, TC_ACT_SHOT};
 use aya_bpf::helpers::bpf_ktime_get_boot_ns;
-use aya_bpf::macros::map;
 use aya_bpf::maps::lpm_trie::Key;
-use aya_bpf::maps::{HashMap, LpmTrie};
 use aya_bpf::programs::TcContext;
 use aya_log_ebpf::{debug, error, warn};
 use network_types::eth::EthHdr;
@@ -11,20 +9,12 @@ use network_types::ip::{IpProto, Ipv4Hdr};
 use network_types::tcp::TcpHdr;
 use network_types::udp::UdpHdr;
 
-use super::{MAX_LOCAL_IP_RULE_SIZE, NIC_IP_MAP_SIZE};
 use crate::conntrack::ipv4::{ConntrackEntry, ConntrackKey, ConntrackPair};
 use crate::conntrack::{ipv4 as ipv4_conntrack, ConntrackType, ProtocolType};
 use crate::context_ext::ContextExt;
 use crate::ip_addr::Ipv4Addr;
+use crate::map::{IPV4_MAHIRO_IP, NIC_IPV4_MAP};
 use crate::nat::{ipv4, L4Hdr};
-
-#[map]
-static NIC_IPV4_MAP: HashMap<u32, Ipv4Addr> = HashMap::with_max_entries(NIC_IP_MAP_SIZE, 0);
-
-/// value 1 means is a mahiro network ip
-#[map]
-static IPV4_MAHIRO_IP: LpmTrie<Ipv4Addr, u8> =
-    LpmTrie::with_max_entries(MAX_LOCAL_IP_RULE_SIZE, BPF_F_NO_PREALLOC);
 
 pub fn ipv4_egress(ctx: &TcContext, _eth_hdr: &mut EthHdr) -> Result<i32, ()> {
     let ipv4_hdr = ctx.load_ptr::<Ipv4Hdr>(EthHdr::LEN).ok_or(())?;
