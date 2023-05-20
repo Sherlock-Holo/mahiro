@@ -1,4 +1,4 @@
-use aya_bpf::bindings::{__u32, TC_ACT_OK, TC_ACT_SHOT};
+use aya_bpf::bindings::__u32;
 use aya_bpf::helpers::bpf_ktime_get_boot_ns;
 use aya_bpf::maps::lpm_trie::Key;
 use aya_bpf::programs::TcContext;
@@ -15,14 +15,14 @@ use crate::ip_addr::Ipv4Addr;
 use crate::map::{IPV4_MAHIRO_IP, NIC_IPV4_MAP};
 use crate::nat::{ipv4, L4Hdr};
 
-pub fn ipv4_redirect_route_snat(ctx: &TcContext, egress_nic_index: __u32) -> Result<i32, ()> {
+pub fn ipv4_redirect_route_snat(ctx: &TcContext, egress_nic_index: __u32) -> Result<bool, ()> {
     let ipv4_hdr = ctx.load_ptr::<Ipv4Hdr>(0).ok_or(())?;
     let src_addr = Ipv4Addr::from(ipv4_hdr.src_addr);
     let key = Key::new(32, src_addr);
 
     // the src ipv4 is not in mahiro network
     if IPV4_MAHIRO_IP.get(&key).copied().unwrap_or(0) == 0 {
-        return Ok(TC_ACT_OK);
+        return Ok(false);
     }
 
     let nic_ip = unsafe {
@@ -30,18 +30,18 @@ pub fn ipv4_redirect_route_snat(ctx: &TcContext, egress_nic_index: __u32) -> Res
             None => {
                 error!(ctx, "egress nic index {} has no ipv4", egress_nic_index);
 
-                return Ok(TC_ACT_SHOT);
+                return Err(());
             }
             Some(nic_index) => nic_index,
         }
     };
 
     match ipv4_hdr.proto {
-        IpProto::Tcp => ipv4_tcp_redirect_route(ctx, ipv4_hdr, nic_ip),
-        IpProto::Udp => ipv4_udp_redirect_route(ctx, ipv4_hdr, nic_ip),
-        IpProto::Icmp => ipv4_icmp_redirect_route(ctx, ipv4_hdr, nic_ip),
+        IpProto::Tcp => ipv4_tcp_redirect_route(ctx, ipv4_hdr, nic_ip).map(|_| true),
+        IpProto::Udp => ipv4_udp_redirect_route(ctx, ipv4_hdr, nic_ip).map(|_| true),
+        IpProto::Icmp => ipv4_icmp_redirect_route(ctx, ipv4_hdr, nic_ip).map(|_| true),
 
-        _ => Ok(TC_ACT_OK),
+        _ => Ok(false),
     }
 }
 
@@ -49,7 +49,7 @@ fn ipv4_tcp_redirect_route(
     ctx: &TcContext,
     ipv4_hdr: &mut Ipv4Hdr,
     nic_ip: Ipv4Addr,
-) -> Result<i32, ()> {
+) -> Result<(), ()> {
     let tcp_hdr = ctx.load_ptr::<TcpHdr>(Ipv4Hdr::LEN).ok_or(())?;
 
     let src_addr = Ipv4Addr::from(ipv4_hdr.src_addr);
@@ -65,7 +65,7 @@ fn ipv4_tcp_redirect_route(
             if tcp_hdr.syn() == 0 || tcp_hdr.ack() > 0 {
                 debug!(ctx, "drop invalid tcp packet");
 
-                return Ok(TC_ACT_SHOT);
+                return Err(());
             }
 
             let snat_entry =
@@ -78,7 +78,7 @@ fn ipv4_tcp_redirect_route(
             if ipv4_conntrack::insert_conntrack_pair(pair).is_err() {
                 error!(ctx, "ipv4 tcp redirect route insert conntrack failed");
 
-                return Ok(TC_ACT_SHOT);
+                return Err(());
             }
         }
 
@@ -103,7 +103,7 @@ fn ipv4_tcp_redirect_route(
                     {
                         error!(ctx, "ipv4 tcp redirect route insert conntrack dnat failed");
 
-                        return Ok(TC_ACT_SHOT);
+                        return Err(());
                     }
                 }
 
@@ -120,14 +120,14 @@ fn ipv4_tcp_redirect_route(
         return Err(());
     }
 
-    Ok(TC_ACT_OK)
+    Ok(())
 }
 
 fn ipv4_udp_redirect_route(
     ctx: &TcContext,
     ipv4_hdr: &mut Ipv4Hdr,
     nic_ip: Ipv4Addr,
-) -> Result<i32, ()> {
+) -> Result<(), ()> {
     let udp_hdr = ctx.load_ptr::<UdpHdr>(Ipv4Hdr::LEN).ok_or(())?;
 
     let src_addr = Ipv4Addr::from(ipv4_hdr.src_addr);
@@ -149,7 +149,7 @@ fn ipv4_udp_redirect_route(
             if ipv4_conntrack::insert_conntrack_pair(pair).is_err() {
                 error!(ctx, "ipv4 udp redirect route insert conntrack failed");
 
-                return Ok(TC_ACT_SHOT);
+                return Err(());
             }
         }
 
@@ -174,7 +174,7 @@ fn ipv4_udp_redirect_route(
                     {
                         error!(ctx, "ipv4 udp redirect route insert conntrack dnat failed");
 
-                        return Ok(TC_ACT_SHOT);
+                        return Err(());
                     }
                 }
 
@@ -191,14 +191,14 @@ fn ipv4_udp_redirect_route(
         return Err(());
     }
 
-    Ok(TC_ACT_OK)
+    Ok(())
 }
 
 fn ipv4_icmp_redirect_route(
     ctx: &TcContext,
     ipv4_hdr: &mut Ipv4Hdr,
     nic_ip: Ipv4Addr,
-) -> Result<i32, ()> {
+) -> Result<(), ()> {
     let icmp_hdr = ctx.load_ptr::<IcmpHdr>(Ipv4Hdr::LEN).ok_or(())?;
 
     let src_addr = Ipv4Addr::from(ipv4_hdr.src_addr);
@@ -216,7 +216,7 @@ fn ipv4_icmp_redirect_route(
             if ipv4_conntrack::insert_conntrack_pair(pair).is_err() {
                 error!(ctx, "ipv4 icmp redirect route insert conntrack failed");
 
-                return Ok(TC_ACT_SHOT);
+                return Err(());
             }
         }
 
@@ -240,7 +240,7 @@ fn ipv4_icmp_redirect_route(
                     {
                         error!(ctx, "ipv4 icmp redirect route insert conntrack dnat failed");
 
-                        return Ok(TC_ACT_SHOT);
+                        return Err(());
                     }
                 }
 
@@ -257,5 +257,5 @@ fn ipv4_icmp_redirect_route(
         return Err(());
     }
 
-    Ok(TC_ACT_OK)
+    Ok(())
 }

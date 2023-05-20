@@ -18,7 +18,9 @@ pub fn redirect_route(ctx: TcContext) -> Result<i32, ()> {
             Some(egress_iface_index) => egress_iface_index,
         };
 
-        ipv4::ipv4_redirect_route_snat(&ctx, egress_iface_index)?;
+        if !ipv4::ipv4_redirect_route_snat(&ctx, egress_iface_index)? {
+            return Ok(TC_ACT_OK);
+        }
 
         egress_iface_index
     } else if ipv4hdr.version() == 6 {
@@ -30,7 +32,9 @@ pub fn redirect_route(ctx: TcContext) -> Result<i32, ()> {
             Some(egress_iface_index) => egress_iface_index,
         };
 
-        ipv6::ipv6_redirect_route_snat(&ctx, egress_iface_index)?;
+        if !ipv6::ipv6_redirect_route_snat(&ctx, egress_iface_index)? {
+            return Ok(TC_ACT_OK);
+        }
 
         egress_iface_index
     } else {
