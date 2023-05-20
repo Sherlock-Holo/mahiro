@@ -9,16 +9,25 @@ use aya_bpf::bindings::{
 use aya_bpf::helpers::bpf_fib_lookup;
 use aya_bpf::programs::TcContext;
 use aya_log_ebpf::{debug, error};
+use network_types::eth::{EthHdr, EtherType};
 use network_types::ip::{Ipv4Hdr, Ipv6Hdr};
 
 const AF_INET: __u8 = 2;
 const AF_INET6: __u8 = 10;
 const IPV6_FLOWINFO_MASK: __be32 = 0x0FFFFFFFu32.to_be();
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct EgressIfaceInfo {
+    pub eth_header: EthHdr,
+    pub index: __u32,
+    _padding: [u8; 6],
+}
+
 pub fn get_egress_iface_index_from_tun_ipv4(
     ctx: &TcContext,
     ipv4hdr: &mut Ipv4Hdr,
-) -> Result<Option<__u32>, ()> {
+) -> Result<Option<EgressIfaceInfo>, ()> {
     let mut fib_lookup = bpf_fib_lookup {
         family: AF_INET,
         l4_protocol: ipv4hdr.proto as _,
@@ -59,7 +68,15 @@ pub fn get_egress_iface_index_from_tun_ipv4(
     if result == BPF_FIB_LKUP_RET_SUCCESS as c_long {
         debug!(ctx, "get ipv4 egress index {} done", fib_lookup.ifindex);
 
-        return Ok(Some(fib_lookup.ifindex));
+        return Ok(Some(EgressIfaceInfo {
+            eth_header: EthHdr {
+                dst_addr: fib_lookup.dmac,
+                src_addr: fib_lookup.smac,
+                ether_type: EtherType::Ipv4,
+            },
+            index: fib_lookup.ifindex,
+            _padding: [0; 6],
+        }));
     }
 
     debug!(ctx, "get ipv4 egress index result {}", result);
@@ -81,7 +98,7 @@ pub fn get_egress_iface_index_from_tun_ipv4(
 pub fn get_egress_iface_index_from_tun_ipv6(
     ctx: &TcContext,
     ipv6hdr: &mut Ipv6Hdr,
-) -> Result<Option<__u32>, ()> {
+) -> Result<Option<EgressIfaceInfo>, ()> {
     let mut fib_lookup = unsafe {
         bpf_fib_lookup {
             family: AF_INET6,
@@ -126,7 +143,15 @@ pub fn get_egress_iface_index_from_tun_ipv6(
     if result == BPF_FIB_LKUP_RET_SUCCESS as c_long {
         debug!(ctx, "get ipv6 egress index {} done", fib_lookup.ifindex);
 
-        return Ok(Some(fib_lookup.ifindex));
+        return Ok(Some(EgressIfaceInfo {
+            eth_header: EthHdr {
+                dst_addr: fib_lookup.dmac,
+                src_addr: fib_lookup.smac,
+                ether_type: EtherType::Ipv6,
+            },
+            index: fib_lookup.ifindex,
+            _padding: [0; 6],
+        }));
     }
 
     debug!(ctx, "get ipv6 egress index result {}", result);
