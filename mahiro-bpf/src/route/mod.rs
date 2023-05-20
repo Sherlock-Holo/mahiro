@@ -14,7 +14,7 @@ use network_types::ip::{Ipv4Hdr, Ipv6Hdr};
 
 use crate::context_ext::ContextExt;
 
-const AF_INET: __u8 = 1;
+const AF_INET: __u8 = 2;
 const AF_INET6: __u8 = 10;
 const IPV6_FLOWINFO_MASK: __be32 = 0x0FFFFFFFu32.to_be();
 
