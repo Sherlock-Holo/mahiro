@@ -89,6 +89,8 @@ fn get_egress_iface_index_from_tun_ipv4(
         return Ok(Some(fib_lookup.ifindex));
     }
 
+    debug!(ctx, "get ipv4 egress index result {}", result);
+
     // BPF_FIB_LKUP_RET_SUCCESS,      /* lookup successful */
     // BPF_FIB_LKUP_RET_BLACKHOLE,    /* dest is blackholed; can be dropped */
     // BPF_FIB_LKUP_RET_UNREACHABLE,  /* dest is unreachable; can be dropped */
@@ -153,6 +155,8 @@ fn get_egress_iface_index_from_tun_ipv6(
 
         return Ok(Some(fib_lookup.ifindex));
     }
+
+    debug!(ctx, "get ipv6 egress index result {}", result);
 
     // BPF_FIB_LKUP_RET_SUCCESS,      /* lookup successful */
     // BPF_FIB_LKUP_RET_BLACKHOLE,    /* dest is blackholed; can be dropped */
