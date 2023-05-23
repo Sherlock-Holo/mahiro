@@ -30,6 +30,7 @@ mod ip_addr;
 
 const SNAT_EGRESS: &str = "snat_egress";
 const DNAT_INGRESS: &str = "dnat_ingress";
+const DNAT_INGRESS_WITH_REDIRECT_ROUTE: &str = "dnat_ingress_with_redirect_route";
 const REDIRECT_ROUTE: &str = "redirect_route";
 const NIC_IPV4_MAP: &str = "NIC_IPV4_MAP";
 const NIC_IPV6_MAP: &str = "NIC_IPV4_MAP";
@@ -90,7 +91,7 @@ impl NatActor {
             }
         }
 
-        let mut attached_bpf_programs = Self::attach_nic(&mut bpf, &watch_nic_list)?;
+        let mut attached_bpf_programs = Self::attach_nic(&mut bpf, bpf_forward, &watch_nic_list)?;
         if bpf_forward {
             let redirect_route_link = Self::attach_redirect_route_nic(&mut bpf, mihari_nic)?;
             attached_bpf_programs.insert(mihari_nic.to_string(), vec![redirect_route_link]);
@@ -110,6 +111,7 @@ impl NatActor {
 
     fn attach_nic(
         bpf: &mut Bpf,
+        bpf_forward: bool,
         watch_nic_list: &HashSet<String>,
     ) -> anyhow::Result<HashMap<String, Vec<OwnedLink<SchedClassifierLink>>>> {
         let mut attached_bpf_programs = HashMap::with_capacity(watch_nic_list.len() * 2);
@@ -135,22 +137,27 @@ impl NatActor {
             attached_bpf_programs.insert(nic.clone(), vec![link]);
         }
 
+        let dnat_prog_name = if bpf_forward {
+            DNAT_INGRESS_WITH_REDIRECT_ROUTE
+        } else {
+            DNAT_INGRESS
+        };
         let dnat_ingress_prog: &mut SchedClassifier = bpf
-            .program_mut(DNAT_INGRESS)
-            .expect("dnat ingress bpf program miss")
+            .program_mut(dnat_prog_name)
+            .unwrap_or_else(|| panic!("dnat ingress bpf program {dnat_prog_name} miss"))
             .try_into()
-            .tap_err(|err| error!(%err, "get sched classifier program failed"))?;
+            .tap_err(|err| error!(%err, dnat_prog_name, "get sched classifier program failed"))?;
         dnat_ingress_prog
             .load()
-            .tap_err(|err| error!(%err, "load dnat ingress bpf program failed"))?;
+            .tap_err(|err| error!(%err, dnat_prog_name, "load dnat ingress bpf program failed"))?;
 
         for nic in watch_nic_list {
             let link_id = dnat_ingress_prog
                 .attach(nic, TcAttachType::Ingress)
-                .tap_err(|err| error!(%err, %nic, "attach dnat ingress bpf program failed"))?;
+                .tap_err(|err| error!(%err, %nic, dnat_prog_name, "attach dnat ingress bpf program failed"))?;
             let link = dnat_ingress_prog
                 .take_link(link_id)
-                .tap_err(|err| error!(%err, "dnat ingress bpf take link failed"))?;
+                .tap_err(|err| error!(%err, dnat_prog_name, "dnat ingress bpf take link failed"))?;
             let link = OwnedLink::from(link);
 
             attached_bpf_programs.get_mut(nic).unwrap().push(link);

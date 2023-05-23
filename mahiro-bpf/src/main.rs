@@ -17,6 +17,11 @@ fn dnat_ingress(ctx: TcContext) -> i32 {
     ingress::ingress(ctx).unwrap_or(TC_ACT_SHOT)
 }
 
+#[classifier(name = "dnat_ingress_with_redirect_route")]
+fn dnat_ingress_with_redirect_route(ctx: TcContext) -> i32 {
+    ingress::ingress_with_redirect_route(ctx).unwrap_or(TC_ACT_SHOT)
+}
+
 #[classifier(name = "redirect_route")]
 fn redirect_route(ctx: TcContext) -> i32 {
     redirect_route::redirect_route(ctx).unwrap_or(TC_ACT_SHOT)

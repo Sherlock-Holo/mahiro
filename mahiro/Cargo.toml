@@ -27,8 +27,8 @@ rand = "0.8"
 dashmap = "5"
 
 # bpf
-aya = { git = "https://github.com/aya-rs/aya", rev = "1fa1c14", features = ["async_tokio"] }
-aya-log = { git = "https://github.com/aya-rs/aya", rev = "1fa1c14" }
+aya = { git = "https://github.com/aya-rs/aya", rev = "58f1ecb", features = ["async_tokio"] }
+aya-log = { git = "https://github.com/aya-rs/aya", rev = "58f1ecb" }
 
 # config
 clap = { version = "4", features = ["derive"] }
