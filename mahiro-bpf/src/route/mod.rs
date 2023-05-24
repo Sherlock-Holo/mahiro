@@ -10,7 +10,7 @@ use aya_bpf::helpers::bpf_fib_lookup;
 use aya_bpf::macros::map;
 use aya_bpf::maps::PerCpuArray;
 use aya_bpf::programs::TcContext;
-use aya_log_ebpf::{debug, error};
+use aya_log_ebpf::{debug, error, trace};
 use network_types::eth::{EthHdr, EtherType};
 use network_types::ip::{Ipv4Hdr, Ipv6Hdr};
 
@@ -86,7 +86,7 @@ pub fn get_egress_iface_index_from_tun_ipv4(
         }));
     }
 
-    debug!(ctx, "get ipv4 egress index result {}", result);
+    trace!(ctx, "get ipv4 egress index result {}", result);
 
     // BPF_FIB_LKUP_RET_SUCCESS,      /* lookup successful */
     // BPF_FIB_LKUP_RET_BLACKHOLE,    /* dest is blackholed; can be dropped */
@@ -163,7 +163,7 @@ pub fn get_egress_iface_index_from_tun_ipv6(
         }));
     }
 
-    debug!(ctx, "get ipv6 egress index result {}", result);
+    trace!(ctx, "get ipv6 egress index result {}", result);
 
     // BPF_FIB_LKUP_RET_SUCCESS,      /* lookup successful */
     // BPF_FIB_LKUP_RET_BLACKHOLE,    /* dest is blackholed; can be dropped */
