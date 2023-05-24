@@ -1,8 +1,6 @@
-use aya_bpf::bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC;
-use aya_bpf::bindings::{__s32, BPF_CSUM_LEVEL_DEC, BPF_F_ADJ_ROOM_NO_CSUM_RESET, TC_ACT_OK};
-use aya_bpf::helpers::{bpf_csum_level, bpf_redirect, bpf_skb_adjust_room};
+use aya_bpf::bindings::TC_ACT_OK;
+use aya_bpf::helpers::bpf_redirect;
 use aya_bpf::programs::TcContext;
-use aya_log_ebpf::error;
 use network_types::eth::{EthHdr, EtherType};
 use network_types::ip::{Ipv4Hdr, Ipv6Hdr};
 
@@ -45,25 +43,5 @@ pub fn ingress_with_redirect_route(ctx: TcContext) -> Result<i32, ()> {
         Some(egress_iface_info) => egress_iface_info,
     };
 
-    unsafe {
-        if bpf_skb_adjust_room(
-            ctx.skb.skb,
-            -(EthHdr::LEN as __s32),
-            BPF_ADJ_ROOM_MAC,
-            BPF_F_ADJ_ROOM_NO_CSUM_RESET as _,
-        ) > 0
-        {
-            error!(&ctx, "remove eth header failed");
-
-            return Err(());
-        }
-
-        if bpf_csum_level(ctx.skb.skb, BPF_CSUM_LEVEL_DEC as _) < 0 {
-            error!(&ctx, "change csum level failed");
-
-            return Err(());
-        }
-
-        Ok(bpf_redirect(egress_iface_info.index, 0) as _)
-    }
+    unsafe { Ok(bpf_redirect(egress_iface_info.index, 0) as _) }
 }

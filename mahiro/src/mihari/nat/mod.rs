@@ -30,7 +30,7 @@ mod ip_addr;
 
 const SNAT_EGRESS: &str = "snat_egress";
 const DNAT_INGRESS: &str = "dnat_ingress";
-const DNAT_INGRESS_WITH_REDIRECT_ROUTE: &str = "dnat_ingress_with_redirect_route";
+const DNAT_INGRESS_WITH_REDIRECT_ROUTE: &str = "dnat_ingress_with_redirect";
 const REDIRECT_ROUTE: &str = "redirect_route";
 const NIC_IPV4_MAP: &str = "NIC_IPV4_MAP";
 const NIC_IPV6_MAP: &str = "NIC_IPV4_MAP";
