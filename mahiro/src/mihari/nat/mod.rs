@@ -20,7 +20,7 @@ use rtnetlink::{AddressHandle, Handle, LinkHandle};
 use tap::TapFallible;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tracing::error;
+use tracing::{debug, error};
 use tracing_log::LogTracer;
 
 use self::ip_addr::{BpfIpv4Addr, BpfIpv6Addr};
@@ -33,7 +33,7 @@ const DNAT_INGRESS: &str = "dnat_ingress";
 const DNAT_INGRESS_WITH_REDIRECT_ROUTE: &str = "dnat_ingress_with_redirect";
 const REDIRECT_ROUTE: &str = "redirect_route";
 const NIC_IPV4_MAP: &str = "NIC_IPV4_MAP";
-const NIC_IPV6_MAP: &str = "NIC_IPV4_MAP";
+const NIC_IPV6_MAP: &str = "NIC_IPV6_MAP";
 const IPV4_MAHIRO_IP: &str = "IPV4_MAHIRO_IP";
 const IPV6_MAHIRO_IP: &str = "IPV6_MAHIRO_IP";
 const WATCH_INTERVAL: Duration = Duration::from_secs(5);
@@ -284,7 +284,6 @@ impl NatActor {
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
         let mut interval_stream = IntervalStream::new(time::interval(WATCH_INTERVAL));
-        interval_stream.next().await;
 
         while (interval_stream.next().await).is_some() {
             if let Err(err) = self.run_circle().await {
@@ -301,7 +300,13 @@ impl NatActor {
 
     async fn update_nic_addrs(&mut self) -> anyhow::Result<()> {
         let new_nic_addrs = self.collect_nic_addrs().await?;
+
+        debug!(?new_nic_addrs, "collect nic addrs done");
+
         let (deleted_addrs, add_addrs) = self.diff_nic_addrs(new_nic_addrs);
+
+        debug!(?deleted_addrs, ?add_addrs, "diff nic addrs done");
+
         for (index, addr) in deleted_addrs {
             if addr.ipv4.is_some() {
                 Self::fn_with_nic_ipv4_map(&mut self.bpf, |mut map| match map.remove(&index) {
@@ -326,6 +331,8 @@ impl NatActor {
                     Ok(_) => Ok(()),
                 })?;
             }
+
+            self.nic_addrs.remove(&index);
         }
 
         for (index, addr) in add_addrs {
@@ -346,6 +353,8 @@ impl NatActor {
                     Ok(())
                 })?;
             }
+
+            self.nic_addrs.insert(index, addr);
         }
 
         Ok(())
@@ -360,12 +369,12 @@ impl NatActor {
         for (index, addr) in &self.nic_addrs {
             match new_nic_addrs.get(index) {
                 None => {
-                    deleted_addrs.insert(*index, addr.clone());
+                    deleted_addrs.insert(*index, *addr);
                 }
 
                 Some(new_addr) => {
                     if new_addr != addr {
-                        deleted_addrs.insert(*index, addr.clone());
+                        deleted_addrs.insert(*index, *addr);
                     }
                 }
             }
@@ -373,12 +382,12 @@ impl NatActor {
         for (index, addr) in &new_nic_addrs {
             match self.nic_addrs.get(index) {
                 None => {
-                    add_addrs.insert(*index, addr.clone());
+                    add_addrs.insert(*index, *addr);
                 }
 
                 Some(old_addr) => {
                     if addr != old_addr {
-                        add_addrs.insert(*index, addr.clone());
+                        add_addrs.insert(*index, *addr);
                     }
                 }
             }
@@ -435,7 +444,7 @@ impl NatActor {
                                 Ok(Some(IpAddr::V4(Ipv4Addr::new(
                                     addr[0], addr[1], addr[2], addr[3],
                                 ))))
-                            } else if addr.len() == 32 {
+                            } else if addr.len() == 16 {
                                 let addr: [u8; 16] = addr.as_slice().try_into().unwrap();
 
                                 Ok(Some(IpAddr::V6(Ipv6Addr::from(addr))))
@@ -474,7 +483,7 @@ impl NatActor {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 struct NicAddr {
     ipv4: Option<Ipv4Addr>,
     ipv6: Option<Ipv6Addr>,

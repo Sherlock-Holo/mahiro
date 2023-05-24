@@ -57,7 +57,7 @@ impl Tun {
         netlink_handle: Handle,
     ) -> anyhow::Result<Self> {
         let queue_size = thread::available_parallelism()
-            .unwrap_or(NonZeroUsize::new(4).unwrap())
+            .unwrap_or(NonZeroUsize::new(8).unwrap())
             .get()
             * 4;
         let mut configuration = tun::configure();
