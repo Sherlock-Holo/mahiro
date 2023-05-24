@@ -155,7 +155,7 @@ impl UdpActor {
 
         match message {
             Message::Frame(frame) => {
-                let frame_data = frame.encode_length_delimited_to_vec();
+                let frame_data = frame.encode_to_vec();
 
                 self.udp_socket
                     .send(&frame_data)
@@ -167,7 +167,7 @@ impl UdpActor {
             Message::Packet(Err(err)) => Err(err.into()),
 
             Message::Packet(Ok(packet)) => {
-                let frame = match Frame::decode_length_delimited(packet) {
+                let frame = match Frame::decode(packet) {
                     Err(err) => {
                         error!(%err, "decode packet failed");
 
@@ -248,7 +248,7 @@ mod tests {
         let (n, from) = server.recv_from(&mut buf).await.unwrap();
         info!(%from, "get client udp addr");
 
-        let receive_frame = Frame::decode_length_delimited(&buf[..n]).unwrap();
+        let receive_frame = Frame::decode(&buf[..n]).unwrap();
 
         assert_eq!(frame, receive_frame);
 
@@ -259,10 +259,7 @@ mod tests {
             data: Bytes::from_static(b"world"),
         };
 
-        server
-            .send_to(&frame.encode_length_delimited_to_vec(), from)
-            .await
-            .unwrap();
+        server.send_to(&frame.encode_to_vec(), from).await.unwrap();
 
         let receive_frame = encrypt_mailbox.next().await.unwrap();
         let receive_frame = match receive_frame {

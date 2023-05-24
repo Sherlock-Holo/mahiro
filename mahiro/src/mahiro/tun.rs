@@ -1,15 +1,11 @@
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
 use bytes::BytesMut;
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
-use futures_util::task::noop_waker_ref;
 use futures_util::StreamExt;
 use ipnet::{Ipv4Net, Ipv6Net};
 use rtnetlink::Handle;
 use tap::TapFallible;
-use tokio::io::{AsyncReadExt, AsyncWrite};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
@@ -219,23 +215,14 @@ impl TunActorQueueWriter {
 
         match message {
             Message::ToTun(packet) => {
-                match Pin::new(&mut self.tun_writer)
-                    .poll_write(&mut Context::from_waker(noop_waker_ref()), &packet)
-                {
-                    Poll::Pending => {
-                        warn!("tun queue is full, drop packet");
+                self.tun_writer
+                    .write(&packet)
+                    .await
+                    .tap_err(|err| error!(%err, "write packet to tun failed"))?;
 
-                        Ok(())
-                    }
+                debug!("write packet to tun done");
 
-                    Poll::Ready(result) => {
-                        result.tap_err(|err| error!(%err, "write packet to tun failed"))?;
-
-                        debug!("write packet to tun done");
-
-                        Ok(())
-                    }
-                }
+                Ok(())
             }
         }
     }

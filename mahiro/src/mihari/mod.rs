@@ -74,6 +74,8 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     });
 
     if bpf_nat || bpf_forward {
+        info!(bpf_nat, bpf_forward, "enable bpf nat mode");
+
         let bpf_prog = config
             .bpf_prog
             .ok_or_else(|| anyhow::anyhow!("bpf prog not set"))?;

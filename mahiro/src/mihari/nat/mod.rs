@@ -20,7 +20,7 @@ use rtnetlink::{AddressHandle, Handle, LinkHandle};
 use tap::TapFallible;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 use tracing_log::LogTracer;
 
 use self::ip_addr::{BpfIpv4Addr, BpfIpv6Addr};
@@ -134,6 +134,8 @@ impl NatActor {
                 .tap_err(|err| error!(%err, "snat egress bpf take link failed"))?;
             let link = OwnedLink::from(link);
 
+            info!(%nic, "attach snat egress bpf program to nic done");
+
             attached_bpf_programs.insert(nic.clone(), vec![link]);
         }
 
@@ -159,6 +161,8 @@ impl NatActor {
                 .take_link(link_id)
                 .tap_err(|err| error!(%err, dnat_prog_name, "dnat ingress bpf take link failed"))?;
             let link = OwnedLink::from(link);
+
+            info!(%nic, dnat_prog_name, "attach dnat ingress bpf program to nic done");
 
             attached_bpf_programs.get_mut(nic).unwrap().push(link);
         }

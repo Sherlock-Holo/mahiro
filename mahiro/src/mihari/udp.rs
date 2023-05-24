@@ -165,7 +165,7 @@ impl UdpActor {
 
         match message {
             Message::Frame { frame, to } => {
-                let packet = frame.encode_length_delimited_to_vec();
+                let packet = frame.encode_to_vec();
 
                 self.udp_socket
                     .send_to(&packet, to)
@@ -184,7 +184,7 @@ impl UdpActor {
             }
 
             Message::Packet(Ok((packet, from))) => {
-                let frame = match Frame::decode_length_delimited(packet) {
+                let frame = match Frame::decode(packet) {
                     Err(err) => {
                         error!(%err, "decode packet failed");
 
@@ -240,8 +240,7 @@ impl UdpActor {
                             }
 
                             Ok((mut encrypt_actor, response_frame)) => {
-                                let response_packet =
-                                    response_frame.encode_length_delimited_to_vec();
+                                let response_packet = response_frame.encode_to_vec();
 
                                 self.udp_socket
                                     .send_to(&response_packet, from)
