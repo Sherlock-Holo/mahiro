@@ -3,8 +3,8 @@ use std::path::Path;
 
 use aya::Bpf;
 use tap::TapFallible;
+use tokio::fs;
 use tokio::task::JoinSet;
-use tokio::{fs, signal};
 use tracing::{error, info};
 
 use self::config::Config;
@@ -13,6 +13,7 @@ use self::peer_store::PeerStore;
 use self::tun::TunActor;
 use self::udp::UdpActor;
 use crate::public_key::PublicKey;
+use crate::util;
 
 mod config;
 mod encrypt;
@@ -104,7 +105,7 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
             Err(anyhow::anyhow!("actors stopped"))
         }
 
-        result = signal::ctrl_c() => {
+        result = util::stop_signal() => {
             result?;
 
             info!("mihari stopping");

@@ -1,13 +1,14 @@
 use std::path::Path;
 
+use tokio::fs;
 use tokio::task::JoinSet;
-use tokio::{fs, signal};
 use tracing::info;
 
 use self::config::Config;
 use self::encrypt::EncryptActor;
 use self::tun::{TunActor, TunConfig};
 use self::udp::UdpActor;
+use crate::util;
 
 mod config;
 mod encrypt;
@@ -68,7 +69,7 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
             Err(anyhow::anyhow!("actors stopped"))
         }
 
-        result = signal::ctrl_c() => {
+        result = util::stop_signal() => {
             result?;
 
             info!("mahiro stopping");
