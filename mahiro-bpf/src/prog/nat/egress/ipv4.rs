@@ -48,9 +48,10 @@ pub fn ipv4_egress(ctx: &TcContext, _eth_hdr: &mut EthHdr) -> Result<i32, ()> {
 }
 
 fn ipv4_tcp_egress(ctx: &TcContext, ipv4_hdr: &mut Ipv4Hdr, nic_ip: Ipv4Addr) -> Result<i32, ()> {
-    let tcp_hdr = ctx
-        .load_ptr::<TcpHdr>(EthHdr::LEN + Ipv4Hdr::LEN)
-        .ok_or(())?;
+    let tcp_hdr = match ctx.load_ptr::<TcpHdr>(EthHdr::LEN + Ipv4Hdr::LEN) {
+        None => return Ok(TC_ACT_OK),
+        Some(tcp_hdr) => tcp_hdr,
+    };
 
     let src_addr = Ipv4Addr::from(ipv4_hdr.src_addr);
     let dst_addr = Ipv4Addr::from(ipv4_hdr.dst_addr);
@@ -121,9 +122,10 @@ fn ipv4_tcp_egress(ctx: &TcContext, ipv4_hdr: &mut Ipv4Hdr, nic_ip: Ipv4Addr) ->
 }
 
 fn ipv4_udp_egress(ctx: &TcContext, ipv4_hdr: &mut Ipv4Hdr, nic_ip: Ipv4Addr) -> Result<i32, ()> {
-    let udp_hdr = ctx
-        .load_ptr::<UdpHdr>(EthHdr::LEN + Ipv4Hdr::LEN)
-        .ok_or(())?;
+    let udp_hdr = match ctx.load_ptr::<UdpHdr>(EthHdr::LEN + Ipv4Hdr::LEN) {
+        None => return Ok(TC_ACT_OK),
+        Some(udp_hdr) => udp_hdr,
+    };
 
     let src_addr = Ipv4Addr::from(ipv4_hdr.src_addr);
     let dst_addr = Ipv4Addr::from(ipv4_hdr.dst_addr);
@@ -187,9 +189,10 @@ fn ipv4_udp_egress(ctx: &TcContext, ipv4_hdr: &mut Ipv4Hdr, nic_ip: Ipv4Addr) ->
 }
 
 fn ipv4_icmp_egress(ctx: &TcContext, ipv4_hdr: &mut Ipv4Hdr, nic_ip: Ipv4Addr) -> Result<i32, ()> {
-    let icmp_hdr = ctx
-        .load_ptr::<IcmpHdr>(EthHdr::LEN + Ipv4Hdr::LEN)
-        .ok_or(())?;
+    let icmp_hdr = match ctx.load_ptr::<IcmpHdr>(EthHdr::LEN + Ipv4Hdr::LEN) {
+        None => return Ok(TC_ACT_OK),
+        Some(icmp_hdr) => icmp_hdr,
+    };
 
     let src_addr = Ipv4Addr::from(ipv4_hdr.src_addr);
     let dst_addr = Ipv4Addr::from(ipv4_hdr.dst_addr);

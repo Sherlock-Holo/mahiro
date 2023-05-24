@@ -48,9 +48,10 @@ pub fn ipv6_egress(ctx: &TcContext, _eth_hdr: &mut EthHdr) -> Result<i32, ()> {
 }
 
 fn ipv6_tcp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) -> Result<i32, ()> {
-    let tcp_hdr = ctx
-        .load_ptr::<TcpHdr>(EthHdr::LEN + Ipv6Hdr::LEN)
-        .ok_or(())?;
+    let tcp_hdr = match ctx.load_ptr::<TcpHdr>(EthHdr::LEN + Ipv6Hdr::LEN) {
+        None => return Ok(TC_ACT_OK),
+        Some(tcp_hdr) => tcp_hdr,
+    };
 
     let src_addr = Ipv6Addr::from(unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 });
     let dst_addr = Ipv6Addr::from(unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 });
@@ -121,9 +122,10 @@ fn ipv6_tcp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) ->
 }
 
 fn ipv6_udp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) -> Result<i32, ()> {
-    let udp_hdr = ctx
-        .load_ptr::<UdpHdr>(EthHdr::LEN + Ipv6Hdr::LEN)
-        .ok_or(())?;
+    let udp_hdr = match ctx.load_ptr::<UdpHdr>(EthHdr::LEN + Ipv6Hdr::LEN) {
+        None => return Ok(TC_ACT_OK),
+        Some(udp_hdr) => udp_hdr,
+    };
 
     let src_addr = Ipv6Addr::from(unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 });
     let dst_addr = Ipv6Addr::from(unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 });
@@ -187,9 +189,10 @@ fn ipv6_udp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) ->
 }
 
 fn ipv6_icmp_egress(ctx: &TcContext, ipv6_hdr: &mut Ipv6Hdr, nic_ip: Ipv6Addr) -> Result<i32, ()> {
-    let icmp_hdr = ctx
-        .load_ptr::<IcmpHdr>(EthHdr::LEN + Ipv6Hdr::LEN)
-        .ok_or(())?;
+    let icmp_hdr = match ctx.load_ptr::<IcmpHdr>(EthHdr::LEN + Ipv6Hdr::LEN) {
+        None => return Ok(TC_ACT_OK),
+        Some(icmp_hdr) => icmp_hdr,
+    };
 
     let src_addr = Ipv6Addr::from(unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 });
     let dst_addr = Ipv6Addr::from(unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 });

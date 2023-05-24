@@ -34,9 +34,10 @@ fn ipv6_tcp_ingress(
     src_addr: Ipv6Addr,
     dst_addr: Ipv6Addr,
 ) -> Result<i32, ()> {
-    let tcp_hdr = ctx
-        .load_ptr::<TcpHdr>(EthHdr::LEN + Ipv6Hdr::LEN)
-        .ok_or(())?;
+    let tcp_hdr = match ctx.load_ptr::<TcpHdr>(EthHdr::LEN + Ipv6Hdr::LEN) {
+        None => return Ok(TC_ACT_OK),
+        Some(tcp_hdr) => tcp_hdr,
+    };
 
     let src_port = tcp_hdr.source;
     let dst_port = tcp_hdr.dest;
@@ -123,9 +124,11 @@ fn ipv6_udp_ingress(
     src_addr: Ipv6Addr,
     dst_addr: Ipv6Addr,
 ) -> Result<i32, ()> {
-    let udp_hdr = ctx
-        .load_ptr::<UdpHdr>(EthHdr::LEN + Ipv6Hdr::LEN)
-        .ok_or(())?;
+    // TODO why sometimes mahiro udp frame can't get the udp header?
+    let udp_hdr = match ctx.load_ptr::<UdpHdr>(EthHdr::LEN + Ipv6Hdr::LEN) {
+        None => return Ok(TC_ACT_OK),
+        Some(udp_hdr) => udp_hdr,
+    };
 
     let src_port = udp_hdr.source;
     let dst_port = udp_hdr.dest;
@@ -182,9 +185,10 @@ fn ipv6_icmp_ingress(
     src_addr: Ipv6Addr,
     dst_addr: Ipv6Addr,
 ) -> Result<i32, ()> {
-    let icmp_hdr = ctx
-        .load_ptr::<IcmpHdr>(EthHdr::LEN + Ipv6Hdr::LEN)
-        .ok_or(())?;
+    let icmp_hdr = match ctx.load_ptr::<IcmpHdr>(EthHdr::LEN + Ipv6Hdr::LEN) {
+        None => return Ok(TC_ACT_OK),
+        Some(icmp_hdr) => icmp_hdr,
+    };
 
     let protocol_type = ProtocolType::Icmp;
     let dnat_key = ConntrackKey::new(src_addr, dst_addr, 0, 0, protocol_type);
