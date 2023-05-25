@@ -8,7 +8,8 @@ use std::path::Path;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use clap::Parser;
-use tokio::fs;
+use tokio::{fs, task};
+use tokio_uring::Runtime;
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt;
@@ -51,19 +52,30 @@ fn init_log(log_level: LogLevel) {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let args = Args::parse();
+    task::spawn_blocking(|| {
+        let mut uring_builder = tokio_uring::uring_builder();
+        uring_builder.setup_sqpoll(50);
+        let mut builder = tokio_uring::builder();
+        builder.uring_builder(&uring_builder).entries(4096);
 
-    init_log(args.log);
+        Runtime::new(&builder).unwrap().block_on(async move {
+            let args = Args::parse();
 
-    match args.command {
-        Command::Mahiro { config } => mahiro::run(Path::new(&config)).await,
-        Command::Mihari {
-            config,
-            bpf_nat,
-            bpf_forward,
-        } => mihari::run(Path::new(&config), bpf_nat, bpf_forward).await,
-        Command::Genkey { private, public } => generate_keypair(&private, &public).await,
-    }
+            init_log(args.log);
+
+            match args.command {
+                Command::Mahiro { config } => mahiro::run(Path::new(&config)).await,
+                Command::Mihari {
+                    config,
+                    bpf_nat,
+                    bpf_forward,
+                } => mihari::run(Path::new(&config), bpf_nat, bpf_forward).await,
+                Command::Genkey { private, public } => generate_keypair(&private, &public).await,
+            }
+        })
+    })
+    .await
+    .unwrap()
 }
 
 async fn generate_keypair(private: &str, public: &str) -> anyhow::Result<()> {

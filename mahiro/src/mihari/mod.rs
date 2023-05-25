@@ -63,12 +63,12 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     .await?;
 
     let mut join_set = JoinSet::new();
-    join_set.spawn(async move {
+    join_set.spawn_local(async move {
         tun_actor.run().await;
 
         Ok(())
     });
-    join_set.spawn(async move {
+    join_set.spawn_local(async move {
         udp_actor.run().await;
 
         Ok(())

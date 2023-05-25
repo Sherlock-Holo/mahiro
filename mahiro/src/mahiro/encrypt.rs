@@ -768,12 +768,7 @@ mod tests {
         mailbox_sender.send(Message::Frame(frame)).await.unwrap();
 
         let tun_message = tun_mailbox.next().await.unwrap();
-        let data = match tun_message {
-            TunMessage::FromTun(_) => {
-                panic!("other tun message");
-            }
-            TunMessage::ToTun(data) => data,
-        };
+        let TunMessage::ToTun(data) = tun_message;
 
         assert_eq!(data.as_ref(), b"mihari");
     }

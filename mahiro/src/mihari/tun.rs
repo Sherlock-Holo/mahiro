@@ -7,7 +7,6 @@ use futures_util::StreamExt;
 use ipnet::{Ipv4Net, Ipv6Net};
 use rtnetlink::Handle;
 use tap::TapFallible;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -95,12 +94,15 @@ impl TunActor {
         Ok(())
     }
 
-    async fn read_from_tun(mut tun_reader: TunReader, peer_store: PeerStore) -> anyhow::Result<()> {
+    async fn read_from_tun(tun_reader: TunReader, peer_store: PeerStore) -> anyhow::Result<()> {
         let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
             buf.reserve(1500);
 
-            let packet = match tun_reader.read_buf(&mut buf).await {
+            let result = tun_reader.read(buf).await;
+            buf = result.1;
+            let result = result.0;
+            let packet = match result {
                 Err(err) => {
                     error!(%err, "receive tun packet failed");
 
@@ -164,11 +166,11 @@ impl TunActor {
                     tun_writer,
                 };
 
-                join_set.spawn(async move { tun_actor_queue_writer.run().await });
+                join_set.spawn_local(async move { tun_actor_queue_writer.run().await });
             }
 
             for tun_reader in self.tun_readers.drain(..) {
-                join_set.spawn(Self::read_from_tun(tun_reader, self.peer_store.clone()));
+                join_set.spawn_local(Self::read_from_tun(tun_reader, self.peer_store.clone()));
             }
 
             info!("start {count} tun actor queue writer done");
@@ -251,8 +253,9 @@ impl TunActorQueueWriter {
                 };
 
                 self.tun_writer
-                    .write(&packet)
+                    .write(packet)
                     .await
+                    .0
                     .tap_err(|err| error!(%err, "write packet to tun failed"))?;
 
                 debug!(%src_ip, %dst_ip, "write packet to tun done");

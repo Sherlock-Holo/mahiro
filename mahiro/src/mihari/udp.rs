@@ -8,8 +8,8 @@ use flume::{Sender, TrySendError};
 use futures_util::StreamExt;
 use prost::Message as _;
 use tap::TapFallible;
-use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
+use tokio_uring::net::UdpSocket;
 use tracing::{debug, error, info, instrument};
 use tracing_log::log::warn;
 
@@ -29,6 +29,7 @@ pub struct UdpActor {
     peer_store: PeerStore,
     tun_sender: Sender<TunMessage>,
 
+    #[derivative(Debug = "ignore")]
     udp_socket: Arc<UdpSocket>,
     read_task: JoinHandle<()>,
 
@@ -79,7 +80,7 @@ impl UdpActor {
             let sender = sender.clone();
             let udp_socket = udp_socket.clone();
 
-            tokio::spawn(Self::read_from_udp(udp_socket, sender))
+            tokio_uring::spawn(Self::read_from_udp(udp_socket, sender))
         };
 
         Ok((udp_socket, read_task))
@@ -101,7 +102,10 @@ impl UdpActor {
         loop {
             buf.reserve(1500);
 
-            let (packet, from) = match udp_socket.recv_buf_from(&mut buf).await {
+            let result = udp_socket.recv_from(buf).await;
+            buf = result.1;
+            let result = result.0;
+            let (packet, from) = match result {
                 Err(err) => {
                     error!(%err, "receive udp socket failed");
 
@@ -168,8 +172,9 @@ impl UdpActor {
                 let packet = frame.encode_to_vec();
 
                 self.udp_socket
-                    .send_to(&packet, to)
+                    .send_to(packet, to)
                     .await
+                    .0
                     .tap_err(|err| error!(%err, %to, "send packet failed"))?;
 
                 debug!(%to, "send packet done");
@@ -243,8 +248,9 @@ impl UdpActor {
                                 let response_packet = response_frame.encode_to_vec();
 
                                 self.udp_socket
-                                    .send_to(&response_packet, from)
+                                    .send_to(response_packet, from)
                                     .await
+                                    .0
                                     .tap_err(
                                         |err| error!(%err, %from, "send packet back failed"),
                                     )?;

@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use bytes::BytesMut;
@@ -7,8 +7,10 @@ use flume::{Sender, TrySendError};
 use futures_util::StreamExt;
 use prost::Message as _;
 use tap::TapFallible;
-use tokio::net::{self, ToSocketAddrs, UdpSocket};
+use tokio::net;
+use tokio::net::ToSocketAddrs;
 use tokio::task::JoinHandle;
+use tokio_uring::net::UdpSocket;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::message::EncryptMessage;
@@ -26,6 +28,7 @@ pub struct UdpActor {
 
     remote_addr: Vec<SocketAddr>,
 
+    #[derivative(Debug = "ignore")]
     udp_socket: Arc<UdpSocket>,
     read_task: JoinHandle<()>,
 }
@@ -59,17 +62,32 @@ impl UdpActor {
         remote_addr: &[SocketAddr],
         sender: Sender<Message>,
     ) -> anyhow::Result<(Arc<UdpSocket>, JoinHandle<()>)> {
-        let udp_socket = UdpSocket::bind("0.0.0.0:0")
+        let udp_socket = UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), 0).into())
             .await
             .tap_err(|err| error!(%err, "bind udp socket failed"))?;
-        udp_socket
-            .connect(remote_addr)
-            .await
-            .tap_err(|err| error!(%err, ?remote_addr, "udp connect failed"))?;
+
+        let mut last_err = None;
+        for &remote_addr in remote_addr {
+            match udp_socket.connect(remote_addr).await {
+                Err(err) => {
+                    last_err = Some(err);
+                }
+
+                Ok(_) => {
+                    last_err.take();
+                }
+            }
+        }
+        if let Some(err) = last_err {
+            error!(%err, ?remote_addr, "udp connect failed");
+
+            return Err(err.into());
+        }
+
         let udp_socket = Arc::new(udp_socket);
         let read_task = {
             let udp_socket = udp_socket.clone();
-            tokio::spawn(Self::read_from_udp(udp_socket, sender))
+            tokio_uring::spawn(Self::read_from_udp(udp_socket, sender))
         };
 
         Ok((udp_socket, read_task))
@@ -91,7 +109,10 @@ impl UdpActor {
         loop {
             buf.reserve(1500);
 
-            let packet = match udp_socket.recv_buf(&mut buf).await {
+            let result = udp_socket.read(buf).await;
+            buf = result.1;
+            let result = result.0;
+            let packet = match result {
                 Err(err) => {
                     error!(%err, "receive udp socket failed");
 
@@ -158,8 +179,9 @@ impl UdpActor {
                 let frame_data = frame.encode_to_vec();
 
                 self.udp_socket
-                    .send(&frame_data)
+                    .write(frame_data)
                     .await
+                    .0
                     .tap_err(|err| error!(%err, "send frame data failed"))?;
 
                 Ok(())
@@ -203,9 +225,12 @@ impl UdpActor {
 
 #[cfg(test)]
 mod tests {
+    use std::net::UdpSocket as StdUdpSocket;
+
     use bytes::Bytes;
     use futures_util::{SinkExt, StreamExt};
     use test_log::test;
+    use tokio::task;
 
     use super::*;
     use crate::cookie::generate_cookie;
@@ -213,60 +238,68 @@ mod tests {
 
     #[test(tokio::test)]
     async fn test() {
-        let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let addr = server.local_addr().unwrap();
+        task::spawn_blocking(|| {
+            tokio_uring::start(async move {
+                let server = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+                let addr = server.local_addr().unwrap();
+                let server = UdpSocket::from_std(server);
 
-        let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
-        let (mailbox_sender, mailbox) = flume::bounded(10);
-        let mut udp_actor = UdpActor::new(
-            encrypt_sender,
-            mailbox_sender.clone(),
-            mailbox.into_stream(),
-            addr,
-        )
+                let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
+                let (mailbox_sender, mailbox) = flume::bounded(10);
+                let mut udp_actor = UdpActor::new(
+                    encrypt_sender,
+                    mailbox_sender.clone(),
+                    mailbox.into_stream(),
+                    addr,
+                )
+                .await
+                .unwrap();
+                tokio_uring::spawn(async move { udp_actor.run().await });
+
+                let mut encrypt_mailbox = encrypt_mailbox.into_stream();
+                let mut mailbox_sender = mailbox_sender.into_sink();
+
+                let cookie = generate_cookie();
+                let frame = Frame {
+                    cookie: cookie.clone(),
+                    r#type: FrameType::Handshake as _,
+                    nonce: 0,
+                    data: Bytes::from_static(b"hello"),
+                };
+
+                mailbox_sender
+                    .send(Message::Frame(frame.clone()))
+                    .await
+                    .unwrap();
+
+                let buf = vec![0; 4096];
+                let (result, buf) = server.recv_from(buf).await;
+                let (n, from) = result.unwrap();
+                info!(%from, "get client udp addr");
+
+                let receive_frame = Frame::decode(&buf[..n]).unwrap();
+
+                assert_eq!(frame, receive_frame);
+
+                let frame = Frame {
+                    cookie,
+                    r#type: FrameType::Handshake as _,
+                    nonce: 1,
+                    data: Bytes::from_static(b"world"),
+                };
+
+                server.send_to(frame.encode_to_vec(), from).await.0.unwrap();
+
+                let receive_frame = encrypt_mailbox.next().await.unwrap();
+                let receive_frame = match receive_frame {
+                    EncryptMessage::Frame(receive_frame) => receive_frame,
+                    _ => panic!("other encrypt message"),
+                };
+
+                assert_eq!(frame, receive_frame);
+            })
+        })
         .await
-        .unwrap();
-        tokio::spawn(async move { udp_actor.run().await });
-
-        let mut encrypt_mailbox = encrypt_mailbox.into_stream();
-        let mut mailbox_sender = mailbox_sender.into_sink();
-
-        let cookie = generate_cookie();
-        let frame = Frame {
-            cookie: cookie.clone(),
-            r#type: FrameType::Handshake as _,
-            nonce: 0,
-            data: Bytes::from_static(b"hello"),
-        };
-
-        mailbox_sender
-            .send(Message::Frame(frame.clone()))
-            .await
-            .unwrap();
-
-        let mut buf = vec![0; 4096];
-        let (n, from) = server.recv_from(&mut buf).await.unwrap();
-        info!(%from, "get client udp addr");
-
-        let receive_frame = Frame::decode(&buf[..n]).unwrap();
-
-        assert_eq!(frame, receive_frame);
-
-        let frame = Frame {
-            cookie,
-            r#type: FrameType::Handshake as _,
-            nonce: 1,
-            data: Bytes::from_static(b"world"),
-        };
-
-        server.send_to(&frame.encode_to_vec(), from).await.unwrap();
-
-        let receive_frame = encrypt_mailbox.next().await.unwrap();
-        let receive_frame = match receive_frame {
-            EncryptMessage::Frame(receive_frame) => receive_frame,
-            _ => panic!("other encrypt message"),
-        };
-
-        assert_eq!(frame, receive_frame);
+        .unwrap()
     }
 }

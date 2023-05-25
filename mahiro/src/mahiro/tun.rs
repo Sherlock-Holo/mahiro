@@ -5,7 +5,6 @@ use futures_util::StreamExt;
 use ipnet::{Ipv4Net, Ipv6Net};
 use rtnetlink::Handle;
 use tap::TapFallible;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
@@ -84,14 +83,17 @@ impl TunActor {
     }
 
     async fn read_from_tun(
-        mut tun_reader: TunReader,
+        tun_reader: TunReader,
         encrypt_sender: Sender<EncryptMessage>,
     ) -> anyhow::Result<()> {
         let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
             buf.reserve(1500);
 
-            let packet = match tun_reader.read_buf(&mut buf).await {
+            let result = tun_reader.read(buf).await;
+            buf = result.1;
+            let result = result.0;
+            let packet = match result {
                 Err(err) => {
                     error!(%err, "receive tun packet failed");
 
@@ -147,13 +149,13 @@ impl TunActor {
                     tun_writer,
                 };
 
-                join_set.spawn(async move { tun_actor_queue_writer.run().await });
+                join_set.spawn_local(async move { tun_actor_queue_writer.run().await });
             }
 
             for tun_reader in self.tun_readers.drain(..) {
                 let encrypt_sender = self.encrypt_sender.clone();
 
-                join_set.spawn(Self::read_from_tun(tun_reader, encrypt_sender));
+                join_set.spawn_local(Self::read_from_tun(tun_reader, encrypt_sender));
             }
 
             info!("start {count} tun actor queue writer done");
@@ -216,8 +218,9 @@ impl TunActorQueueWriter {
         match message {
             Message::ToTun(packet) => {
                 self.tun_writer
-                    .write(&packet)
+                    .write(packet)
                     .await
+                    .0
                     .tap_err(|err| error!(%err, "write packet to tun failed"))?;
 
                 debug!("write packet to tun done");
@@ -239,6 +242,7 @@ mod tests {
     use nix::unistd::getuid;
     use test_log::test;
     use tokio::net::UdpSocket;
+    use tokio::task;
     use tracing::warn;
 
     use super::*;
@@ -251,62 +255,71 @@ mod tests {
             return;
         }
 
-        let (connection, handle, _) = rtnetlink::new_connection().unwrap();
-        tokio::spawn(connection);
+        task::spawn_blocking(|| {
+            tokio_uring::start(async move {
+                let (connection, handle, _) = rtnetlink::new_connection().unwrap();
+                tokio::spawn(connection);
 
-        let tun_config = TunConfig {
-            tun_ipv4: Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 1), 24).unwrap(),
-            tun_ipv6: Ipv6Net::new(Ipv6Addr::from_str("fc00:100::1").unwrap(), 64).unwrap(),
-            tun_name: "test_tun".to_string(),
-            netlink_handle: handle,
-        };
+                let tun_config = TunConfig {
+                    tun_ipv4: Ipv4Net::new(Ipv4Addr::new(192, 168, 1, 1), 24).unwrap(),
+                    tun_ipv6: Ipv6Net::new(Ipv6Addr::from_str("fc00:100::1").unwrap(), 64).unwrap(),
+                    tun_name: "test_tun".to_string(),
+                    netlink_handle: handle,
+                };
 
-        let (mailbox_sender, mailbox) = flume::bounded(10);
-        let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
-        let mut tun_actor = TunActor::new(
-            encrypt_sender,
-            mailbox_sender.clone(),
-            mailbox.into_stream(),
-            tun_config,
-        )
+                let (mailbox_sender, mailbox) = flume::bounded(10);
+                let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
+                let mut tun_actor = TunActor::new(
+                    encrypt_sender,
+                    mailbox_sender.clone(),
+                    mailbox.into_stream(),
+                    tun_config,
+                )
+                .await
+                .unwrap();
+
+                tokio_uring::spawn(async move { tun_actor.run().await });
+
+                let mut encrypt_mailbox = encrypt_mailbox.into_stream();
+
+                let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+                udp_socket.connect("192.168.1.2:8888").await.unwrap();
+                udp_socket.send(b"test").await.unwrap();
+
+                loop {
+                    let encrypt_message = encrypt_mailbox.next().await.unwrap();
+                    let packet = match encrypt_message {
+                        EncryptMessage::Packet(packet) => packet,
+                        _ => panic!("other encrypt message"),
+                    };
+                    let first = packet[0];
+                    if (first >> 4) != 0b100 {
+                        continue;
+                    }
+
+                    // safety: the packet is an ipv4 packet
+                    let ipv4_hdr = unsafe { &*(packet.as_ptr() as *const Ipv4Hdr) };
+                    if Ipv4Addr::from(u32::from_be(ipv4_hdr.dst_addr))
+                        != Ipv4Addr::new(192, 168, 1, 2)
+                    {
+                        continue;
+                    }
+
+                    if ipv4_hdr.proto != IpProto::Udp {
+                        continue;
+                    }
+
+                    let udp_hdr =
+                        unsafe { &*(packet.as_ptr().add(size_of::<Ipv4Hdr>()) as *const UdpHdr) };
+                    if u16::from_be(udp_hdr.dest) != 8888 {
+                        continue;
+                    }
+
+                    return;
+                }
+            })
+        })
         .await
-        .unwrap();
-
-        tokio::spawn(async move { tun_actor.run().await });
-
-        let mut encrypt_mailbox = encrypt_mailbox.into_stream();
-
-        let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-        udp_socket.connect("192.168.1.2:8888").await.unwrap();
-        udp_socket.send(b"test").await.unwrap();
-
-        loop {
-            let encrypt_message = encrypt_mailbox.next().await.unwrap();
-            let packet = match encrypt_message {
-                EncryptMessage::Packet(packet) => packet,
-                _ => panic!("other encrypt message"),
-            };
-            let first = packet[0];
-            if (first >> 4) != 0b100 {
-                continue;
-            }
-
-            // safety: the packet is an ipv4 packet
-            let ipv4_hdr = unsafe { &*(packet.as_ptr() as *const Ipv4Hdr) };
-            if Ipv4Addr::from(u32::from_be(ipv4_hdr.dst_addr)) != Ipv4Addr::new(192, 168, 1, 2) {
-                continue;
-            }
-
-            if ipv4_hdr.proto != IpProto::Udp {
-                continue;
-            }
-
-            let udp_hdr = unsafe { &*(packet.as_ptr().add(size_of::<Ipv4Hdr>()) as *const UdpHdr) };
-            if u16::from_be(udp_hdr.dest) != 8888 {
-                continue;
-            }
-
-            return;
-        }
+        .unwrap()
     }
 }

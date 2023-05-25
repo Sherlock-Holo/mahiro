@@ -60,9 +60,9 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
     .await?;
 
     let mut join_set = JoinSet::new();
-    join_set.spawn(async move { udp_actor.run().await });
+    join_set.spawn_local(async move { udp_actor.run().await });
     join_set.spawn(async move { encrypt_actor.run().await });
-    join_set.spawn(async move { tun_actor.run().await });
+    join_set.spawn_local(async move { tun_actor.run().await });
 
     tokio::select! {
         _ = join_set.join_next() => {
