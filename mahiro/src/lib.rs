@@ -9,7 +9,6 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use clap::Parser;
 use tokio::{fs, task};
-use tokio_uring::Runtime;
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt;
@@ -53,12 +52,7 @@ fn init_log(log_level: LogLevel) {
 
 pub async fn run() -> anyhow::Result<()> {
     task::spawn_blocking(|| {
-        let mut uring_builder = tokio_uring::uring_builder();
-        uring_builder.setup_sqpoll(50);
-        let mut builder = tokio_uring::builder();
-        builder.uring_builder(&uring_builder).entries(4096);
-
-        Runtime::new(&builder).unwrap().block_on(async move {
+        util::create_tokio_uring_runtime().block_on(async move {
             let args = Args::parse();
 
             init_log(args.log);
