@@ -1,4 +1,3 @@
-use aya_bpf::bindings::TC_ACT_OK;
 use aya_bpf::helpers::bpf_ktime_get_boot_ns;
 use aya_bpf::programs::TcContext;
 use aya_log_ebpf::warn;
@@ -14,7 +13,7 @@ use crate::context_ext::ContextExt;
 use crate::ip_addr::Ipv6Addr;
 use crate::nat::{ipv6, L4Hdr};
 
-pub fn ipv6_ingress(ctx: &TcContext, _eth_hdr: &mut EthHdr) -> Result<i32, ()> {
+pub fn ipv6_ingress(ctx: &TcContext, _eth_hdr: &mut EthHdr) -> Result<bool, ()> {
     let ipv6_hdr = ctx.load_ptr::<Ipv6Hdr>(EthHdr::LEN).ok_or(())?;
     let src_addr = Ipv6Addr::from(unsafe { ipv6_hdr.src_addr.in6_u.u6_addr8 });
     let dst_addr = Ipv6Addr::from(unsafe { ipv6_hdr.dst_addr.in6_u.u6_addr8 });
@@ -24,7 +23,7 @@ pub fn ipv6_ingress(ctx: &TcContext, _eth_hdr: &mut EthHdr) -> Result<i32, ()> {
         IpProto::Udp => ipv6_udp_ingress(ctx, ipv6_hdr, src_addr, dst_addr),
         IpProto::Ipv6Icmp => ipv6_icmp_ingress(ctx, ipv6_hdr, src_addr, dst_addr),
 
-        _ => Ok(TC_ACT_OK),
+        _ => Ok(false),
     }
 }
 
@@ -33,9 +32,9 @@ fn ipv6_tcp_ingress(
     ipv6_hdr: &mut Ipv6Hdr,
     src_addr: Ipv6Addr,
     dst_addr: Ipv6Addr,
-) -> Result<i32, ()> {
+) -> Result<bool, ()> {
     let tcp_hdr = match ctx.load_ptr::<TcpHdr>(EthHdr::LEN + Ipv6Hdr::LEN) {
-        None => return Ok(TC_ACT_OK),
+        None => return Ok(false),
         Some(tcp_hdr) => tcp_hdr,
     };
 
@@ -47,7 +46,7 @@ fn ipv6_tcp_ingress(
     // tcp RST packet can let us remove conntrack immediately
     if tcp_hdr.rst() > 0 {
         return match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
-            None => Ok(TC_ACT_OK),
+            None => Ok(false),
             Some(dnat_entry) => {
                 let dnat_dst_addr = dnat_entry.get_dst_addr();
 
@@ -69,13 +68,15 @@ fn ipv6_tcp_ingress(
                     Some(dnat_dst_addr),
                     None,
                 )
-                .map_err(|_| ())
+                .map_err(|_| ())?;
+
+                Ok(true)
             }
         };
     }
 
     let dnat_dst_addr = match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
-        None => return Ok(TC_ACT_OK),
+        None => return Ok(false),
         Some(dnat_entry) => {
             let update_time = unsafe { bpf_ktime_get_boot_ns() };
             dnat_entry.set_update_time(update_time);
@@ -115,7 +116,9 @@ fn ipv6_tcp_ingress(
         Some(dnat_dst_addr),
         None,
     )
-    .map_err(|_| ())
+    .map_err(|_| ())?;
+
+    Ok(true)
 }
 
 fn ipv6_udp_ingress(
@@ -123,10 +126,10 @@ fn ipv6_udp_ingress(
     ipv6_hdr: &mut Ipv6Hdr,
     src_addr: Ipv6Addr,
     dst_addr: Ipv6Addr,
-) -> Result<i32, ()> {
+) -> Result<bool, ()> {
     // TODO why sometimes mahiro udp frame can't get the udp header?
     let udp_hdr = match ctx.load_ptr::<UdpHdr>(EthHdr::LEN + Ipv6Hdr::LEN) {
-        None => return Ok(TC_ACT_OK),
+        None => return Ok(false),
         Some(udp_hdr) => udp_hdr,
     };
 
@@ -136,7 +139,7 @@ fn ipv6_udp_ingress(
     let dnat_key = ConntrackKey::new(src_addr, dst_addr, src_port, dst_port, protocol_type);
 
     let dnat_dst_addr = match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
-        None => return Ok(TC_ACT_OK),
+        None => return Ok(false),
         Some(dnat_entry) => {
             let update_time = unsafe { bpf_ktime_get_boot_ns() };
             dnat_entry.set_update_time(update_time);
@@ -176,7 +179,9 @@ fn ipv6_udp_ingress(
         Some(dnat_dst_addr),
         None,
     )
-    .map_err(|_| ())
+    .map_err(|_| ())?;
+
+    Ok(true)
 }
 
 fn ipv6_icmp_ingress(
@@ -184,9 +189,9 @@ fn ipv6_icmp_ingress(
     ipv6_hdr: &mut Ipv6Hdr,
     src_addr: Ipv6Addr,
     dst_addr: Ipv6Addr,
-) -> Result<i32, ()> {
+) -> Result<bool, ()> {
     let icmp_hdr = match ctx.load_ptr::<IcmpHdr>(EthHdr::LEN + Ipv6Hdr::LEN) {
-        None => return Ok(TC_ACT_OK),
+        None => return Ok(false),
         Some(icmp_hdr) => icmp_hdr,
     };
 
@@ -194,7 +199,7 @@ fn ipv6_icmp_ingress(
     let dnat_key = ConntrackKey::new(src_addr, dst_addr, 0, 0, protocol_type);
 
     let dnat_dst_addr = match ipv6_conntrack::get_conntrack_entry(&dnat_key, ConntrackType::Dnat) {
-        None => return Ok(TC_ACT_OK),
+        None => return Ok(false),
         Some(dnat_entry) => {
             let update_time = unsafe { bpf_ktime_get_boot_ns() };
             dnat_entry.set_update_time(update_time);
@@ -233,5 +238,7 @@ fn ipv6_icmp_ingress(
         Some(dnat_dst_addr),
         None,
     )
-    .map_err(|_| ())
+    .map_err(|_| ())?;
+
+    Ok(true)
 }
