@@ -11,7 +11,8 @@ use std::thread::available_parallelism;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use clap::Parser;
-use tokio::{fs, task};
+use ring_io::fs;
+use tokio::task;
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt;
@@ -85,8 +86,12 @@ pub async fn run() -> anyhow::Result<()> {
 async fn generate_keypair(private: &str, public: &str) -> anyhow::Result<()> {
     let keypair = Encrypt::generate_keypair()?;
 
-    fs::write(private, BASE64_STANDARD.encode(keypair.private)).await?;
-    fs::write(public, BASE64_STANDARD.encode(keypair.public)).await?;
+    fs::write(private, BASE64_STANDARD.encode(keypair.private))
+        .await
+        .0?;
+    fs::write(public, BASE64_STANDARD.encode(keypair.public))
+        .await
+        .0?;
 
     Ok(())
 }

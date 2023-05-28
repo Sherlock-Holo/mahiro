@@ -2,7 +2,7 @@ use std::path::Path;
 
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use tokio::fs;
+use ring_io::fs;
 use tracing::info;
 
 use self::config::Config;

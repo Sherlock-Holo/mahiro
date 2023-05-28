@@ -4,8 +4,8 @@ use std::path::Path;
 use aya::Bpf;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use ring_io::fs;
 use tap::TapFallible;
-use tokio::fs;
 use tracing::{error, info};
 
 use self::config::Config;
