@@ -2,9 +2,10 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use aya::Bpf;
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use tap::TapFallible;
 use tokio::fs;
-use tokio::task::JoinSet;
 use tracing::{error, info};
 
 use self::config::Config;
@@ -62,17 +63,17 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     )
     .await?;
 
-    let mut join_set = JoinSet::new();
-    join_set.spawn_local(async move {
+    let mut tasks = FuturesUnordered::new();
+    tasks.push(ring_io::spawn(async move {
         tun_actor.run().await;
 
         Ok(())
-    });
-    join_set.spawn_local(async move {
+    }));
+    tasks.push(ring_io::spawn(async move {
         udp_actor.run().await;
 
         Ok(())
-    });
+    }));
 
     if bpf_nat || bpf_forward {
         info!(bpf_nat, bpf_forward, "enable bpf nat mode");
@@ -96,12 +97,12 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
                 bpf,
             )?;
 
-            join_set.spawn(async move { nat_actor.run().await });
+            tasks.push(ring_io::spawn(async move { nat_actor.run().await }));
         }
     }
 
     tokio::select! {
-        _ = join_set.join_next() => {
+        _ = tasks.next() => {
             Err(anyhow::anyhow!("actors stopped"))
         }
 
@@ -110,7 +111,7 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
 
             info!("mihari stopping");
 
-            join_set.shutdown().await;
+            tasks.clear();
 
             Ok(())
         }

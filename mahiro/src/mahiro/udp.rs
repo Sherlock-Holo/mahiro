@@ -6,11 +6,11 @@ use derivative::Derivative;
 use flume::{Sender, TrySendError};
 use futures_util::StreamExt;
 use prost::Message as _;
+use ring_io::net::udp::UdpSocket;
+use ring_io::runtime::Task;
 use tap::TapFallible;
 use tokio::net;
 use tokio::net::ToSocketAddrs;
-use tokio::task::JoinHandle;
-use tokio_uring::net::UdpSocket;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::message::EncryptMessage;
@@ -28,9 +28,8 @@ pub struct UdpActor {
 
     remote_addr: Vec<SocketAddr>,
 
-    #[derivative(Debug = "ignore")]
     udp_socket: Arc<UdpSocket>,
-    read_task: JoinHandle<()>,
+    read_task: Option<Task<()>>,
 }
 
 impl UdpActor {
@@ -52,7 +51,7 @@ impl UdpActor {
             encrypt_sender,
             remote_addr,
             udp_socket,
-            read_task,
+            read_task: Some(read_task),
         };
 
         Ok(udp_actor)
@@ -61,9 +60,8 @@ impl UdpActor {
     async fn start(
         remote_addr: &[SocketAddr],
         sender: Sender<Message>,
-    ) -> anyhow::Result<(Arc<UdpSocket>, JoinHandle<()>)> {
+    ) -> anyhow::Result<(Arc<UdpSocket>, Task<()>)> {
         let udp_socket = UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), 0).into())
-            .await
             .tap_err(|err| error!(%err, "bind udp socket failed"))?;
 
         let mut last_err = None;
@@ -87,19 +85,19 @@ impl UdpActor {
         let udp_socket = Arc::new(udp_socket);
         let read_task = {
             let udp_socket = udp_socket.clone();
-            tokio_uring::spawn(Self::read_from_udp(udp_socket, sender))
+            ring_io::spawn(Self::read_from_udp(udp_socket, sender))
         };
 
         Ok((udp_socket, read_task))
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
-        self.read_task.abort();
+        self.read_task.take().unwrap().cancel().await;
 
         let (udp_socket, read_task) =
             Self::start(&self.remote_addr, self.mailbox_sender.clone()).await?;
         self.udp_socket = udp_socket;
-        self.read_task = read_task;
+        self.read_task = Some(read_task);
 
         Ok(())
     }
@@ -109,7 +107,7 @@ impl UdpActor {
         loop {
             buf.reserve(1500);
 
-            let result = udp_socket.read(buf).await;
+            let result = udp_socket.recv(buf).await;
             buf = result.1;
             let result = result.0;
             let packet = match result {
@@ -179,7 +177,7 @@ impl UdpActor {
                 let frame_data = frame.encode_to_vec();
 
                 self.udp_socket
-                    .write(frame_data)
+                    .send(frame_data)
                     .await
                     .0
                     .tap_err(|err| error!(%err, "send frame data failed"))?;
@@ -230,76 +228,71 @@ mod tests {
     use bytes::Bytes;
     use futures_util::{SinkExt, StreamExt};
     use test_log::test;
-    use tokio::task;
 
     use super::*;
     use crate::cookie::generate_cookie;
     use crate::protocol::FrameType;
 
-    #[test(tokio::test)]
-    async fn test() {
-        task::spawn_blocking(|| {
-            tokio_uring::start(async move {
-                let server = StdUdpSocket::bind("127.0.0.1:0").unwrap();
-                let addr = server.local_addr().unwrap();
-                let server = UdpSocket::from_std(server);
+    #[test]
+    fn test() {
+        ring_io::block_on(async move {
+            let server = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+            let addr = server.local_addr().unwrap();
+            let server = UdpSocket::from_std(server);
 
-                let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
-                let (mailbox_sender, mailbox) = flume::bounded(10);
-                let mut udp_actor = UdpActor::new(
-                    encrypt_sender,
-                    mailbox_sender.clone(),
-                    mailbox.into_stream(),
-                    addr,
-                )
+            let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
+            let (mailbox_sender, mailbox) = flume::bounded(10);
+            let mut udp_actor = UdpActor::new(
+                encrypt_sender,
+                mailbox_sender.clone(),
+                mailbox.into_stream(),
+                addr,
+            )
+            .await
+            .unwrap();
+            ring_io::spawn(async move { udp_actor.run().await }).detach();
+
+            let mut encrypt_mailbox = encrypt_mailbox.into_stream();
+            let mut mailbox_sender = mailbox_sender.into_sink();
+
+            let cookie = generate_cookie();
+            let frame = Frame {
+                cookie: cookie.clone(),
+                r#type: FrameType::Handshake as _,
+                nonce: 0,
+                data: Bytes::from_static(b"hello"),
+            };
+
+            mailbox_sender
+                .send(Message::Frame(frame.clone()))
                 .await
                 .unwrap();
-                tokio_uring::spawn(async move { udp_actor.run().await });
 
-                let mut encrypt_mailbox = encrypt_mailbox.into_stream();
-                let mut mailbox_sender = mailbox_sender.into_sink();
+            let buf = vec![0; 4096];
+            let (result, buf) = server.recv_from(buf).await;
+            let (n, from) = result.unwrap();
+            info!(%from, "get client udp addr");
 
-                let cookie = generate_cookie();
-                let frame = Frame {
-                    cookie: cookie.clone(),
-                    r#type: FrameType::Handshake as _,
-                    nonce: 0,
-                    data: Bytes::from_static(b"hello"),
-                };
+            let receive_frame = Frame::decode(&buf[..n]).unwrap();
 
-                mailbox_sender
-                    .send(Message::Frame(frame.clone()))
-                    .await
-                    .unwrap();
+            assert_eq!(frame, receive_frame);
 
-                let buf = vec![0; 4096];
-                let (result, buf) = server.recv_from(buf).await;
-                let (n, from) = result.unwrap();
-                info!(%from, "get client udp addr");
+            let frame = Frame {
+                cookie,
+                r#type: FrameType::Handshake as _,
+                nonce: 1,
+                data: Bytes::from_static(b"world"),
+            };
 
-                let receive_frame = Frame::decode(&buf[..n]).unwrap();
+            server.send_to(frame.encode_to_vec(), from).await.0.unwrap();
 
-                assert_eq!(frame, receive_frame);
+            let receive_frame = encrypt_mailbox.next().await.unwrap();
+            let receive_frame = match receive_frame {
+                EncryptMessage::Frame(receive_frame) => receive_frame,
+                _ => panic!("other encrypt message"),
+            };
 
-                let frame = Frame {
-                    cookie,
-                    r#type: FrameType::Handshake as _,
-                    nonce: 1,
-                    data: Bytes::from_static(b"world"),
-                };
-
-                server.send_to(frame.encode_to_vec(), from).await.0.unwrap();
-
-                let receive_frame = encrypt_mailbox.next().await.unwrap();
-                let receive_frame = match receive_frame {
-                    EncryptMessage::Frame(receive_frame) => receive_frame,
-                    _ => panic!("other encrypt message"),
-                };
-
-                assert_eq!(frame, receive_frame);
-            })
+            assert_eq!(frame, receive_frame);
         })
-        .await
-        .unwrap()
     }
 }

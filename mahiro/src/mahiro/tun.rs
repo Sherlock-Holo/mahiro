@@ -1,11 +1,11 @@
 use bytes::BytesMut;
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
+use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use ipnet::{Ipv4Net, Ipv6Net};
 use rtnetlink::Handle;
 use tap::TapFallible;
-use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 use super::message::TunMessage as Message;
@@ -140,7 +140,7 @@ impl TunActor {
     }
 
     pub async fn run(&mut self) {
-        let mut join_set = JoinSet::new();
+        let mut tasks = FuturesUnordered::new();
         loop {
             let count = self.tun_writers.len();
             for tun_writer in self.tun_writers.drain(..) {
@@ -149,26 +149,28 @@ impl TunActor {
                     tun_writer,
                 };
 
-                join_set.spawn_local(async move { tun_actor_queue_writer.run().await });
+                let task = ring_io::spawn(async move { tun_actor_queue_writer.run().await });
+                tasks.push(task);
             }
 
             for tun_reader in self.tun_readers.drain(..) {
                 let encrypt_sender = self.encrypt_sender.clone();
 
-                join_set.spawn_local(Self::read_from_tun(tun_reader, encrypt_sender));
+                let task = ring_io::spawn(Self::read_from_tun(tun_reader, encrypt_sender));
+                tasks.push(task);
             }
 
             info!("start {count} tun actor queue writer done");
 
-            while let Some(result) = join_set.join_next().await {
-                if let Err(err) = result.unwrap() {
+            while let Some(result) = tasks.next().await {
+                if let Err(err) = result {
                     error!(%err, "tun actor queue writer stop with error");
 
                     break;
                 }
             }
 
-            join_set.shutdown().await;
+            tasks.clear();
 
             error!("tun actor queue writer stop, need restart");
 
@@ -256,7 +258,7 @@ mod tests {
         }
 
         task::spawn_blocking(|| {
-            tokio_uring::start(async move {
+            ring_io::block_on(async move {
                 let (connection, handle, _) = rtnetlink::new_connection().unwrap();
                 tokio::spawn(connection);
 
@@ -278,7 +280,7 @@ mod tests {
                 .await
                 .unwrap();
 
-                tokio_uring::spawn(async move { tun_actor.run().await });
+                ring_io::spawn(async move { tun_actor.run().await }).detach();
 
                 let mut encrypt_mailbox = encrypt_mailbox.into_stream();
 

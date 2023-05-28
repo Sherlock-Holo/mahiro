@@ -2,8 +2,11 @@
 #![feature(ip)]
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Sherlock-Holo/mahiro/master/mahiro.svg")]
 
+use std::future::pending;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::Path;
+use std::thread::available_parallelism;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -51,8 +54,15 @@ fn init_log(log_level: LogLevel) {
 }
 
 pub async fn run() -> anyhow::Result<()> {
+    let threads = available_parallelism()
+        .unwrap_or(NonZeroUsize::new(4).unwrap())
+        .get();
+    for _ in 0..threads {
+        task::spawn_blocking(|| ring_io::block_on(pending::<()>()));
+    }
+
     task::spawn_blocking(|| {
-        util::create_tokio_uring_runtime().block_on(async move {
+        ring_io::block_on(async move {
             let args = Args::parse();
 
             init_log(args.log);

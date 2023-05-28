@@ -8,10 +8,10 @@ build = "build.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "fs", "signal"] }
-tokio-uring = { version = "0.4", features = ["bytes"] }
+ring_io = { git = "https://github.com/Sherlock-Holo/ring_io.git", branch = "master" }
 tokio-stream = { version = "0.1", features = ["time", "io-util"] }
 futures-util = "0.3"
-flume = { version = "0.10", git = "https://github.com/Sherlock-Holo/flume.git", rev = "9824485" }
+flume = { version = "0.10", git = "https://github.com/zesterer/flume.git", rev = "bfa2a9b" }
 once_cell = "1"
 bytes = "1"
 derivative = "2"

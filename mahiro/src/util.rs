@@ -8,7 +8,6 @@ use flume::r#async::RecvStream;
 use rand::{thread_rng, Rng};
 use tokio::signal::unix;
 use tokio::signal::unix::SignalKind;
-use tokio_uring::Runtime;
 
 /// flume 'static RecvStream alias
 pub type Receiver<T> = RecvStream<'static, T>;
@@ -31,15 +30,6 @@ pub async fn stop_signal() -> io::Result<()> {
     .await;
 
     Ok(())
-}
-
-pub fn create_tokio_uring_runtime() -> Runtime {
-    let mut uring_builder = tokio_uring::uring_builder();
-    uring_builder.setup_sqpoll(50);
-    let mut builder = tokio_uring::builder();
-    builder.uring_builder(&uring_builder).entries(4096);
-
-    Runtime::new(&builder).unwrap()
 }
 
 #[derive(Debug)]

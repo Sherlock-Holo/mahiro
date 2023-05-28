@@ -1,7 +1,5 @@
-use std::fs::File as StdFile;
 use std::net::IpAddr;
 use std::num::NonZeroUsize;
-use std::os::fd::OwnedFd;
 use std::sync::Arc;
 use std::thread;
 
@@ -9,11 +7,11 @@ use derivative::Derivative;
 use futures_util::TryStreamExt;
 use ipnet::{Ipv4Net, Ipv6Net};
 use netlink_packet_route::nlas::link::Nla;
+use ring_io::buf::{IoBuf, IoBufMut};
+use ring_io::io::ring_fd::{NotSeekable, RingFd};
+use ring_io::BufResult;
 use rtnetlink::Handle;
 use tap::TapFallible;
-use tokio_uring::buf::{IoBuf, IoBufMut};
-use tokio_uring::fs::File;
-use tokio_uring::BufResult;
 use tracing::{error, info};
 use tun::platform::Queue;
 use tun::Device;
@@ -62,12 +60,7 @@ impl Tun {
         let mut tun_readers = Vec::with_capacity(self.queues.len());
         let mut tun_writers = Vec::with_capacity(self.queues.len());
         self.queues.into_iter().for_each(|queue| {
-            // let (reader, writer) = io::split(queue);
-            let fd = OwnedFd::from(queue);
-            let file = StdFile::from(fd);
-            // tokio_uring doesn't have AsyncFd like tokio, but we can convert Queue into
-            // tokio_uring File to use io_uring
-            let file = Arc::new(File::from_std(file));
+            let file = Arc::new(RingFd::new_not_seekable(queue));
 
             tun_readers.push(TunReader {
                 ipv4: self.ipv4,
@@ -145,13 +138,13 @@ pub struct TunReader {
     ipv6: Ipv6Net,
     name: Arc<str>,
     #[derivative(Debug = "ignore")]
-    queue: Arc<File>,
+    queue: Arc<RingFd<Queue, NotSeekable>>,
 }
 
 impl TunReader {
     #[inline]
     pub async fn read<T: IoBufMut>(&self, buf: T) -> BufResult<usize, T> {
-        self.queue.read_at(buf, 0).await
+        self.queue.read(buf).await
     }
 }
 
@@ -162,12 +155,12 @@ pub struct TunWriter {
     ipv6: Ipv6Net,
     name: Arc<str>,
     #[derivative(Debug = "ignore")]
-    queue: Arc<File>,
+    queue: Arc<RingFd<Queue, NotSeekable>>,
 }
 
 impl TunWriter {
     #[inline]
     pub async fn write<T: IoBuf>(&self, buf: T) -> BufResult<usize, T> {
-        self.queue.write_at(buf, 0).await
+        self.queue.write(buf).await
     }
 }

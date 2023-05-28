@@ -7,9 +7,9 @@ use derivative::Derivative;
 use flume::{Sender, TrySendError};
 use futures_util::StreamExt;
 use prost::Message as _;
+use ring_io::net::udp::UdpSocket;
+use ring_io::runtime::Task;
 use tap::TapFallible;
-use tokio::task::JoinHandle;
-use tokio_uring::net::UdpSocket;
 use tracing::{debug, error, info, instrument};
 use tracing_log::log::warn;
 
@@ -29,9 +29,8 @@ pub struct UdpActor {
     peer_store: PeerStore,
     tun_sender: Sender<TunMessage>,
 
-    #[derivative(Debug = "ignore")]
     udp_socket: Arc<UdpSocket>,
-    read_task: JoinHandle<()>,
+    read_task: Option<Task<()>>,
 
     listen_addr: SocketAddr,
     #[derivative(Debug = "ignore")]
@@ -58,7 +57,7 @@ impl UdpActor {
             peer_store,
             tun_sender,
             udp_socket,
-            read_task,
+            read_task: Some(read_task),
             listen_addr,
             local_private_key,
             heartbeat_interval,
@@ -68,31 +67,29 @@ impl UdpActor {
     async fn start(
         listen_addr: SocketAddr,
         sender: Sender<Message>,
-    ) -> anyhow::Result<(Arc<UdpSocket>, JoinHandle<()>)> {
+    ) -> anyhow::Result<(Arc<UdpSocket>, Task<()>)> {
         let udp_socket = UdpSocket::bind(listen_addr)
-            .await
             .tap_err(|err| error!(%err, %listen_addr, "bind udp socket failed"))?;
         let udp_socket = Arc::new(udp_socket);
 
         info!(%listen_addr, "bind udp socket done");
 
         let read_task = {
-            let sender = sender.clone();
             let udp_socket = udp_socket.clone();
 
-            tokio_uring::spawn(Self::read_from_udp(udp_socket, sender))
+            ring_io::spawn(Self::read_from_udp(udp_socket, sender))
         };
 
         Ok((udp_socket, read_task))
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
-        self.read_task.abort();
+        self.read_task.take().unwrap().cancel().await;
 
         let (udp_socket, read_task) =
             Self::start(self.listen_addr, self.mailbox_sender.clone()).await?;
         self.udp_socket = udp_socket;
-        self.read_task = read_task;
+        self.read_task = Some(read_task);
 
         Ok(())
     }
@@ -263,11 +260,12 @@ impl UdpActor {
 
                                 let peer_store = self.peer_store.clone();
 
-                                tokio::spawn(async move {
+                                ring_io::spawn(async move {
                                     let _ = encrypt_actor.run().await;
 
                                     peer_store.remove_peer(&cookie);
-                                });
+                                })
+                                .detach();
 
                                 Ok(())
                             }

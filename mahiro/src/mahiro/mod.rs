@@ -1,7 +1,8 @@
 use std::path::Path;
 
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use tokio::fs;
-use tokio::task::JoinSet;
 use tracing::info;
 
 use self::config::Config;
@@ -59,13 +60,13 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
     )
     .await?;
 
-    let mut join_set = JoinSet::new();
-    join_set.spawn_local(async move { udp_actor.run().await });
-    join_set.spawn(async move { encrypt_actor.run().await });
-    join_set.spawn_local(async move { tun_actor.run().await });
+    let mut tasks = FuturesUnordered::new();
+    tasks.push(ring_io::spawn(async move { udp_actor.run().await }));
+    tasks.push(ring_io::spawn(async move { encrypt_actor.run().await }));
+    tasks.push(ring_io::spawn(async move { tun_actor.run().await }));
 
     tokio::select! {
-        _ = join_set.join_next() => {
+        _ = tasks.next() => {
             Err(anyhow::anyhow!("actors stopped"))
         }
 
@@ -74,7 +75,7 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
 
             info!("mahiro stopping");
 
-            join_set.shutdown().await;
+            tasks.clear();
 
             Ok(())
         }
