@@ -1,4 +1,5 @@
 use std::task::Poll;
+use std::time::SystemTime;
 use std::{future, io};
 
 use aya::programs::tc::SchedClassifierLink;
@@ -6,6 +7,8 @@ use aya::programs::xdp::XdpLink;
 use aya::programs::Link;
 use flume::r#async::RecvStream;
 use rand::{thread_rng, Rng};
+use ring_io::runtime;
+use ring_io::runtime::Builder;
 use tokio::signal::unix;
 use tokio::signal::unix::SignalKind;
 
@@ -14,6 +17,13 @@ pub type Receiver<T> = RecvStream<'static, T>;
 
 pub fn generate_nonce() -> u64 {
     thread_rng().gen()
+}
+
+pub fn generate_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as _
 }
 
 pub async fn stop_signal() -> io::Result<()> {
@@ -30,6 +40,13 @@ pub async fn stop_signal() -> io::Result<()> {
     .await;
 
     Ok(())
+}
+
+pub fn io_uring_builder() -> Builder {
+    let mut builder = runtime::create_io_uring_builder();
+    builder.setup_sqpoll(100).dontfork();
+
+    builder
 }
 
 #[derive(Debug)]

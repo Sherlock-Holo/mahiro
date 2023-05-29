@@ -20,6 +20,7 @@ use tracing_subscriber::{fmt, Registry};
 
 use self::args::{Args, Command, LogLevel};
 use self::encrypt::Encrypt;
+use crate::util::io_uring_builder;
 
 mod args;
 mod cookie;
@@ -29,7 +30,6 @@ mod mahiro;
 mod mihari;
 mod protocol;
 mod public_key;
-mod timestamp;
 mod tun;
 mod util;
 
@@ -59,25 +59,32 @@ pub async fn run() -> anyhow::Result<()> {
         .unwrap_or(NonZeroUsize::new(4).unwrap())
         .get();
     for _ in 0..threads {
-        task::spawn_blocking(|| ring_io::block_on(pending::<()>()));
+        task::spawn_blocking(|| {
+            ring_io::block_on_with_io_uring_builder(pending::<()>(), &io_uring_builder())
+        });
     }
 
     task::spawn_blocking(|| {
-        ring_io::block_on(async move {
-            let args = Args::parse();
+        ring_io::block_on_with_io_uring_builder(
+            async move {
+                let args = Args::parse();
 
-            init_log(args.log);
+                init_log(args.log);
 
-            match args.command {
-                Command::Mahiro { config } => mahiro::run(Path::new(&config)).await,
-                Command::Mihari {
-                    config,
-                    bpf_nat,
-                    bpf_forward,
-                } => mihari::run(Path::new(&config), bpf_nat, bpf_forward).await,
-                Command::Genkey { private, public } => generate_keypair(&private, &public).await,
-            }
-        })
+                match args.command {
+                    Command::Mahiro { config } => mahiro::run(Path::new(&config)).await,
+                    Command::Mihari {
+                        config,
+                        bpf_nat,
+                        bpf_forward,
+                    } => mihari::run(Path::new(&config), bpf_nat, bpf_forward).await,
+                    Command::Genkey { private, public } => {
+                        generate_keypair(&private, &public).await
+                    }
+                }
+            },
+            &io_uring_builder(),
+        )
     })
     .await
     .unwrap()

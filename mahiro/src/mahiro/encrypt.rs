@@ -20,8 +20,7 @@ use crate::mahiro::message::{TunMessage, UdpMessage};
 use crate::protocol::frame_data::DataOrHeartbeat;
 use crate::protocol::{Frame, FrameData, FrameType};
 use crate::public_key::PublicKey;
-use crate::timestamp::generate_timestamp;
-use crate::util::Receiver;
+use crate::util::{generate_timestamp, Receiver};
 use crate::{util, HEARTBEAT_DATA};
 
 type Cookie = PublicKey;
