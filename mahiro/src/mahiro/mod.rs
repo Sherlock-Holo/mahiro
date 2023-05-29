@@ -77,6 +77,8 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
 
             tasks.clear();
 
+            info!("mahiro stopped");
+
             Ok(())
         }
     }

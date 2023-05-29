@@ -6,13 +6,11 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
+use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use prost::Message as _;
 use tap::TapFallible;
 use tokio::sync::RwLock;
-use tokio::task::JoinSet;
-use tokio::time;
-use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::message::EncryptMessage as Message;
@@ -119,13 +117,8 @@ impl EncryptActor {
     }
 
     async fn heartbeat(heartbeat_interval: Duration, mailbox_sender: Sender<Message>) {
-        let mut interval_stream = IntervalStream::new(time::interval(heartbeat_interval));
-        interval_stream
-            .next()
-            .await
-            .expect("unexpect interval stream stopped");
-
-        while interval_stream.next().await.is_some() {
+        let mut interval = async_timer::interval(heartbeat_interval);
+        while interval.next().await.is_some() {
             match mailbox_sender.try_send(Message::Heartbeat) {
                 Err(TrySendError::Full(_)) => {
                     warn!("encrypt actor mailbox is full");
@@ -178,15 +171,15 @@ impl EncryptActor {
     async fn run_transport(&mut self) -> anyhow::Error {
         match &self.state {
             State::Transport { cookie, encrypt } => {
-                let mut join_set = JoinSet::new();
+                let mut tasks = FuturesUnordered::new();
                 let heartbeat_receive_instant = Arc::new(RwLock::new(Instant::now()));
                 let heartbeat_interval = self.heartbeat_interval;
                 let mailbox_sender = self.mailbox_sender.clone();
-                join_set.spawn(async move {
+                tasks.push(ring_io::spawn(async move {
                     Self::heartbeat(heartbeat_interval, mailbox_sender).await;
 
                     Ok(())
-                });
+                }));
 
                 let parallel = available_parallelism()
                     .unwrap_or(NonZeroUsize::new(4).unwrap())
@@ -203,11 +196,13 @@ impl EncryptActor {
                         heartbeat_interval,
                     };
 
-                    join_set.spawn(async move { encrypt_actor_transport_inner.run().await });
+                    tasks.push(ring_io::spawn(async move {
+                        encrypt_actor_transport_inner.run().await
+                    }));
                 }
 
-                while let Some(result) = join_set.join_next().await {
-                    if let Err(err) = result.unwrap() {
+                while let Some(result) = tasks.next().await {
+                    if let Err(err) = result {
                         error!(%err, "encrypt actor transport inner run failed");
 
                         return err;
@@ -292,11 +287,12 @@ impl EncryptActor {
             .tap_err(|err| error!(%err, "send handshake frame failed"))?;
 
         let mailbox_sender = mailbox_sender.clone();
-        tokio::spawn(async move {
-            time::sleep(handshake_timeout).await;
+        ring_io::spawn(async move {
+            (&mut async_timer::interval(handshake_timeout)).await;
 
             let _ = mailbox_sender.send_async(Message::HandshakeTimeout).await;
-        });
+        })
+        .detach();
 
         Ok(Some(State::Handshake {
             cookie: cookie.into(),
@@ -661,116 +657,118 @@ mod tests {
 
     use super::*;
 
-    #[test(tokio::test)]
-    async fn test() {
-        let noise_params = NoiseParams::from_str("Noise_IK_25519_ChaChaPoly_BLAKE2s").unwrap();
-        let builder = Builder::new(noise_params);
-        let initiator_keypair = builder.generate_keypair().unwrap();
-        let responder_keypair = builder.generate_keypair().unwrap();
-        let mut handshake_state = builder
-            .local_private_key(&responder_keypair.private)
-            .build_responder()
+    #[test]
+    fn test() {
+        ring_io::block_on(async move {
+            let noise_params = NoiseParams::from_str("Noise_IK_25519_ChaChaPoly_BLAKE2s").unwrap();
+            let builder = Builder::new(noise_params);
+            let initiator_keypair = builder.generate_keypair().unwrap();
+            let responder_keypair = builder.generate_keypair().unwrap();
+            let mut handshake_state = builder
+                .local_private_key(&responder_keypair.private)
+                .build_responder()
+                .unwrap();
+            let mut buf = vec![0; 65535];
+
+            let (tun_sender, tun_mailbox) = flume::bounded(10);
+            let (udp_sender, udp_mailbox) = flume::bounded(10);
+            let (mailbox_sender, mailbox) = flume::bounded(10);
+
+            let mut encrypt_actor = EncryptActor::new(
+                udp_sender,
+                tun_sender.clone(),
+                mailbox_sender.clone(),
+                mailbox.into_stream(),
+                Duration::from_secs(10),
+                initiator_keypair.private.into(),
+                responder_keypair.public.into(),
+            )
+            .await
             .unwrap();
-        let mut buf = vec![0; 65535];
 
-        let (tun_sender, tun_mailbox) = flume::bounded(10);
-        let (udp_sender, udp_mailbox) = flume::bounded(10);
-        let (mailbox_sender, mailbox) = flume::bounded(10);
+            let mut udp_mailbox = udp_mailbox.into_stream();
+            let mut tun_mailbox = tun_mailbox.into_stream();
+            let mut mailbox_sender = mailbox_sender.into_sink();
 
-        let mut encrypt_actor = EncryptActor::new(
-            udp_sender,
-            tun_sender.clone(),
-            mailbox_sender.clone(),
-            mailbox.into_stream(),
-            Duration::from_secs(10),
-            initiator_keypair.private.into(),
-            responder_keypair.public.into(),
-        )
-        .await
-        .unwrap();
+            ring_io::spawn(async move { encrypt_actor.run().await }).detach();
 
-        let mut udp_mailbox = udp_mailbox.into_stream();
-        let mut tun_mailbox = tun_mailbox.into_stream();
-        let mut mailbox_sender = mailbox_sender.into_sink();
+            // ---- handshake ----
 
-        tokio::spawn(async move { encrypt_actor.run().await });
+            let udp_message = udp_mailbox.next().await.unwrap();
+            let frame = match udp_message {
+                UdpMessage::Frame(frame) => frame,
+                UdpMessage::Packet(_) => {
+                    panic!("other udp message");
+                }
+            };
 
-        // ---- handshake ----
+            assert_eq!(frame.r#type(), FrameType::Handshake);
 
-        let udp_message = udp_mailbox.next().await.unwrap();
-        let frame = match udp_message {
-            UdpMessage::Frame(frame) => frame,
-            UdpMessage::Packet(_) => {
-                panic!("other udp message");
+            handshake_state.read_message(&frame.data, &mut buf).unwrap();
+            assert_eq!(
+                handshake_state.get_remote_static().unwrap(),
+                initiator_keypair.public
+            );
+
+            let cookie = frame.cookie;
+            let timestamp = generate_timestamp().to_be_bytes();
+            let n = handshake_state.write_message(&timestamp, &mut buf).unwrap();
+            let frame = Frame {
+                cookie: cookie.clone(),
+                r#type: FrameType::Handshake as _,
+                nonce: 0,
+                data: Bytes::copy_from_slice(&buf[..n]),
+            };
+            mailbox_sender.send(Message::Frame(frame)).await.unwrap();
+
+            let transport_state = handshake_state.into_stateless_transport_mode().unwrap();
+
+            // make sure encrypt actor finish become transport
+            (&mut async_timer::interval(Duration::from_millis(100))).await;
+
+            // ---- encrypt send to udp ----
+
+            mailbox_sender
+                .send(Message::Packet(Bytes::from_static(b"hello")))
+                .await
+                .unwrap();
+
+            let mut data = receive_data_frame(&mut udp_mailbox, &transport_state, &mut buf).await;
+            assert_eq!(data.as_ref(), b"hello");
+
+            mailbox_sender
+                .send(Message::Packet(Bytes::from_static(b"mahiro")))
+                .await
+                .unwrap();
+
+            data = receive_data_frame(&mut udp_mailbox, &transport_state, &mut buf).await;
+            assert_eq!(data.as_ref(), b"mahiro");
+
+            // ---- udp send to encrypt ----
+
+            let frame_data = FrameData {
+                timestamp: generate_timestamp(),
+                data_or_heartbeat: Some(DataOrHeartbeat::Data(Bytes::from_static(b"mihari"))),
             }
-        };
+            .encode_to_vec();
+            let nonce = util::generate_nonce();
+            let n = transport_state
+                .write_message(nonce, &frame_data, &mut buf)
+                .unwrap();
+            let frame = Frame {
+                cookie,
+                r#type: FrameType::Transport as _,
+                nonce,
+                data: Bytes::copy_from_slice(&buf[..n]),
+            };
 
-        assert_eq!(frame.r#type(), FrameType::Handshake);
+            mailbox_sender.send(Message::Frame(frame)).await.unwrap();
 
-        handshake_state.read_message(&frame.data, &mut buf).unwrap();
-        assert_eq!(
-            handshake_state.get_remote_static().unwrap(),
-            initiator_keypair.public
-        );
+            let tun_message = tun_mailbox.next().await.unwrap();
+            let TunMessage::ToTun(data) = tun_message;
 
-        let cookie = frame.cookie;
-        let timestamp = generate_timestamp().to_be_bytes();
-        let n = handshake_state.write_message(&timestamp, &mut buf).unwrap();
-        let frame = Frame {
-            cookie: cookie.clone(),
-            r#type: FrameType::Handshake as _,
-            nonce: 0,
-            data: Bytes::copy_from_slice(&buf[..n]),
-        };
-        mailbox_sender.send(Message::Frame(frame)).await.unwrap();
-
-        let transport_state = handshake_state.into_stateless_transport_mode().unwrap();
-
-        // make sure encrypt actor finish become transport
-        time::sleep(Duration::from_millis(100)).await;
-
-        // ---- encrypt send to udp ----
-
-        mailbox_sender
-            .send(Message::Packet(Bytes::from_static(b"hello")))
-            .await
-            .unwrap();
-
-        let mut data = receive_data_frame(&mut udp_mailbox, &transport_state, &mut buf).await;
-        assert_eq!(data.as_ref(), b"hello");
-
-        mailbox_sender
-            .send(Message::Packet(Bytes::from_static(b"mahiro")))
-            .await
-            .unwrap();
-
-        data = receive_data_frame(&mut udp_mailbox, &transport_state, &mut buf).await;
-        assert_eq!(data.as_ref(), b"mahiro");
-
-        // ---- udp send to encrypt ----
-
-        let frame_data = FrameData {
-            timestamp: generate_timestamp(),
-            data_or_heartbeat: Some(DataOrHeartbeat::Data(Bytes::from_static(b"mihari"))),
-        }
-        .encode_to_vec();
-        let nonce = util::generate_nonce();
-        let n = transport_state
-            .write_message(nonce, &frame_data, &mut buf)
-            .unwrap();
-        let frame = Frame {
-            cookie,
-            r#type: FrameType::Transport as _,
-            nonce,
-            data: Bytes::copy_from_slice(&buf[..n]),
-        };
-
-        mailbox_sender.send(Message::Frame(frame)).await.unwrap();
-
-        let tun_message = tun_mailbox.next().await.unwrap();
-        let TunMessage::ToTun(data) = tun_message;
-
-        assert_eq!(data.as_ref(), b"mihari");
+            assert_eq!(data.as_ref(), b"mihari");
+        })
     }
 
     async fn receive_data_frame(

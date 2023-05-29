@@ -113,6 +113,8 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
 
             tasks.clear();
 
+            info!("mihari stopped");
+
             Ok(())
         }
     }
