@@ -2,7 +2,6 @@
 #![feature(ip)]
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Sherlock-Holo/mahiro/master/mahiro.svg")]
 
-use std::future::pending;
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -58,9 +57,12 @@ pub async fn run() -> anyhow::Result<()> {
     let threads = available_parallelism()
         .unwrap_or(NonZeroUsize::new(4).unwrap())
         .get();
+    let (_abort, abort_rx) = flume::bounded::<()>(1);
     for _ in 0..threads {
-        task::spawn_blocking(|| {
-            ring_io::block_on_with_io_uring_builder(pending::<()>(), &io_uring_builder())
+        let abort_rx = abort_rx.clone();
+
+        task::spawn_blocking(move || {
+            ring_io::block_on_with_io_uring_builder(abort_rx.into_recv_async(), &io_uring_builder())
         });
     }
 

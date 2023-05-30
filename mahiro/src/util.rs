@@ -44,7 +44,7 @@ pub async fn stop_signal() -> io::Result<()> {
 
 pub fn io_uring_builder() -> Builder {
     let mut builder = runtime::create_io_uring_builder();
-    builder.setup_sqpoll(100).dontfork();
+    builder.dontfork();
 
     builder
 }
