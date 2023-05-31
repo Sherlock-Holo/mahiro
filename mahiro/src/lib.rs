@@ -3,12 +3,15 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Sherlock-Holo/mahiro/master/mahiro.svg")]
 
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::Path;
+use std::thread::available_parallelism;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use clap::Parser;
 use ring_io::fs;
+use ring_io::runtime::Runtime;
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt;
@@ -49,7 +52,17 @@ fn init_log(log_level: LogLevel) {
     subscriber::set_global_default(layered).unwrap();
 }
 
-pub async fn run() -> anyhow::Result<()> {
+pub fn block_run() -> anyhow::Result<()> {
+    let threads = available_parallelism()
+        .unwrap_or(NonZeroUsize::new(4).unwrap())
+        .get();
+
+    Runtime::new_with_io_uring_builder(&util::io_uring_builder(), threads)
+        .unwrap()
+        .block_on(run())
+}
+
+async fn run() -> anyhow::Result<()> {
     let args = Args::parse();
 
     init_log(args.log);

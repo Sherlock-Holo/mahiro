@@ -33,7 +33,10 @@ pub async fn stop_signal() -> io::Result<()> {
 
 pub fn io_uring_builder() -> Builder {
     let mut builder = runtime::create_io_uring_builder();
-    builder.dontfork();
+    builder
+        .dontfork()
+        .setup_single_issuer()
+        .setup_defer_taskrun();
 
     builder
 }
