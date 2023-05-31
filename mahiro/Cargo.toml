@@ -7,8 +7,9 @@ build = "build.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
-ring_io = { git = "https://github.com/Sherlock-Holo/ring_io.git", branch = "master" }
+tokio = { version = "1", features = ["rt"] }
+ring_io = { git = "https://github.com/Sherlock-Holo/ring_io.git", branch = "single_ring" }
+async-signal = "0.2"
 async-timer = { version = "1.0.0-beta.9", features = ["stream"] }
 tokio-stream = { version = "0.1", features = ["io-util"] }
 futures-util = "0.3"

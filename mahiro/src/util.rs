@@ -1,16 +1,15 @@
-use std::task::Poll;
+use std::io;
 use std::time::SystemTime;
-use std::{future, io};
 
+use async_signal::{Signal, Signals};
 use aya::programs::tc::SchedClassifierLink;
 use aya::programs::xdp::XdpLink;
 use aya::programs::Link;
 use flume::r#async::RecvStream;
+use futures_util::StreamExt;
 use rand::{thread_rng, Rng};
 use ring_io::runtime;
 use ring_io::runtime::Builder;
-use tokio::signal::unix;
-use tokio::signal::unix::SignalKind;
 
 /// flume 'static RecvStream alias
 pub type Receiver<T> = RecvStream<'static, T>;
@@ -27,19 +26,9 @@ pub fn generate_timestamp() -> u64 {
 }
 
 pub async fn stop_signal() -> io::Result<()> {
-    let mut signal_terminate = unix::signal(SignalKind::terminate())?;
-    let mut signal_interrupt = unix::signal(SignalKind::interrupt())?;
+    let mut signals = Signals::new([Signal::Term, Signal::Int])?;
 
-    future::poll_fn(|cx| {
-        if signal_terminate.poll_recv(cx).is_ready() {
-            return Poll::Ready(());
-        }
-
-        signal_interrupt.poll_recv(cx).map(|_| ())
-    })
-    .await;
-
-    Ok(())
+    signals.next().await.unwrap().map(|_| ())
 }
 
 pub fn io_uring_builder() -> Builder {

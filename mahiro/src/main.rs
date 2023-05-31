@@ -1,4 +1,3 @@
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    mahiro::run().await
+fn main() -> anyhow::Result<()> {
+    ring_io::block_on(mahiro::run())
 }

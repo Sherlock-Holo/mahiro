@@ -3,15 +3,12 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/Sherlock-Holo/mahiro/master/mahiro.svg")]
 
 use std::io;
-use std::num::NonZeroUsize;
 use std::path::Path;
-use std::thread::available_parallelism;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use clap::Parser;
 use ring_io::fs;
-use tokio::task;
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt;
@@ -19,7 +16,6 @@ use tracing_subscriber::{fmt, Registry};
 
 use self::args::{Args, Command, LogLevel};
 use self::encrypt::Encrypt;
-use crate::util::io_uring_builder;
 
 mod args;
 mod cookie;
@@ -54,42 +50,19 @@ fn init_log(log_level: LogLevel) {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let threads = available_parallelism()
-        .unwrap_or(NonZeroUsize::new(4).unwrap())
-        .get();
-    let (_abort, abort_rx) = flume::bounded::<()>(1);
-    for _ in 0..threads {
-        let abort_rx = abort_rx.clone();
+    let args = Args::parse();
 
-        task::spawn_blocking(move || {
-            ring_io::block_on_with_io_uring_builder(abort_rx.into_recv_async(), &io_uring_builder())
-        });
+    init_log(args.log);
+
+    match args.command {
+        Command::Mahiro { config } => mahiro::run(Path::new(&config)).await,
+        Command::Mihari {
+            config,
+            bpf_nat,
+            bpf_forward,
+        } => mihari::run(Path::new(&config), bpf_nat, bpf_forward).await,
+        Command::Genkey { private, public } => generate_keypair(&private, &public).await,
     }
-
-    task::spawn_blocking(|| {
-        ring_io::block_on_with_io_uring_builder(
-            async move {
-                let args = Args::parse();
-
-                init_log(args.log);
-
-                match args.command {
-                    Command::Mahiro { config } => mahiro::run(Path::new(&config)).await,
-                    Command::Mihari {
-                        config,
-                        bpf_nat,
-                        bpf_forward,
-                    } => mihari::run(Path::new(&config), bpf_nat, bpf_forward).await,
-                    Command::Genkey { private, public } => {
-                        generate_keypair(&private, &public).await
-                    }
-                }
-            },
-            &io_uring_builder(),
-        )
-    })
-    .await
-    .unwrap()
 }
 
 async fn generate_keypair(private: &str, public: &str) -> anyhow::Result<()> {

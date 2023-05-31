@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::thread;
 
 use aya::Bpf;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use ring_io::fs;
 use tap::TapFallible;
+use tokio::runtime::Builder;
 use tracing::{error, info};
 
 use self::config::Config;
@@ -28,8 +30,18 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     let config_data = fs::read(config).await?;
     let config = serde_yaml::from_slice::<Config>(&config_data)?;
 
-    let (conn, handle, _) = rtnetlink::new_connection()?;
-    tokio::spawn(conn);
+    let (handle_sender, handle_receiver) = flume::bounded(1);
+    thread::spawn(|| {
+        let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async move {
+            let (conn, handle, _) = rtnetlink::new_connection().unwrap();
+
+            handle_sender.send(handle).unwrap();
+
+            conn.await
+        });
+    });
+    let handle = handle_receiver.recv().unwrap();
 
     let (tun_sender, tun_mailbox) = flume::bounded(64);
     let (udp_sender, udp_mailbox) = flume::bounded(64);
