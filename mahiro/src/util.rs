@@ -36,6 +36,8 @@ pub fn io_uring_builder() -> Builder {
     builder
         .dontfork()
         .setup_single_issuer()
+        .setup_coop_taskrun()
+        .setup_submit_all()
         .setup_defer_taskrun();
 
     builder

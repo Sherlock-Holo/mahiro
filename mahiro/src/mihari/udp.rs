@@ -1,14 +1,16 @@
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
+use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use prost::Message as _;
 use ring_io::net::udp::UdpSocket;
-use ring_io::runtime::Task;
 use tap::TapFallible;
 use tracing::{debug, error, info, instrument};
 use tracing_log::log::warn;
@@ -30,7 +32,6 @@ pub struct UdpActor {
     tun_sender: Sender<TunMessage>,
 
     udp_socket: Arc<UdpSocket>,
-    read_task: Option<Task<()>>,
 
     listen_addr: SocketAddr,
     #[derivative(Debug = "ignore")]
@@ -49,7 +50,7 @@ impl UdpActor {
         local_private_key: Bytes,
         heartbeat_interval: Duration,
     ) -> anyhow::Result<Self> {
-        let (udp_socket, read_task) = Self::start(listen_addr, mailbox_sender.clone()).await?;
+        let udp_socket = Self::start(listen_addr).await?;
 
         Ok(Self {
             mailbox_sender,
@@ -57,44 +58,33 @@ impl UdpActor {
             peer_store,
             tun_sender,
             udp_socket,
-            read_task: Some(read_task),
             listen_addr,
             local_private_key,
             heartbeat_interval,
         })
     }
 
-    async fn start(
-        listen_addr: SocketAddr,
-        sender: Sender<Message>,
-    ) -> anyhow::Result<(Arc<UdpSocket>, Task<()>)> {
+    async fn start(listen_addr: SocketAddr) -> anyhow::Result<Arc<UdpSocket>> {
         let udp_socket = UdpSocket::bind(listen_addr)
             .tap_err(|err| error!(%err, %listen_addr, "bind udp socket failed"))?;
         let udp_socket = Arc::new(udp_socket);
 
         info!(%listen_addr, "bind udp socket done");
 
-        let read_task = {
-            let udp_socket = udp_socket.clone();
-
-            ring_io::spawn(Self::read_from_udp(udp_socket, sender))
-        };
-
-        Ok((udp_socket, read_task))
+        Ok(udp_socket)
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
-        self.read_task.take().unwrap().cancel().await;
-
-        let (udp_socket, read_task) =
-            Self::start(self.listen_addr, self.mailbox_sender.clone()).await?;
+        let udp_socket = Self::start(self.listen_addr).await?;
         self.udp_socket = udp_socket;
-        self.read_task = Some(read_task);
 
         Ok(())
     }
 
-    async fn read_from_udp(udp_socket: Arc<UdpSocket>, sender: Sender<Message>) {
+    async fn read_from_udp(
+        udp_socket: Arc<UdpSocket>,
+        sender: Sender<Message>,
+    ) -> anyhow::Result<()> {
         let mut buf = BytesMut::with_capacity(1500 * 4);
         loop {
             buf.reserve(1500);
@@ -108,7 +98,7 @@ impl UdpActor {
 
                     let _ = sender.try_send(Message::Packet(Err(err)));
 
-                    return;
+                    return Err(anyhow::anyhow!("receive udp socket failed"));
                 }
 
                 Ok((_, from)) => (buf.split().freeze(), from),
@@ -122,7 +112,7 @@ impl UdpActor {
                 Err(err) => {
                     error!(%err, "send packet failed");
 
-                    return;
+                    return Err(anyhow::anyhow!("send packet failed"));
                 }
 
                 Ok(_) => {}
@@ -131,30 +121,106 @@ impl UdpActor {
     }
 
     pub async fn run(&mut self) {
+        let mut tasks = FuturesUnordered::new();
+        let task_count = available_parallelism()
+            .unwrap_or(NonZeroUsize::new(4).unwrap())
+            .get();
         loop {
-            if let Err(err) = self.run_circle().await {
-                error!(%err, "udp actor run circle failed, need restart");
+            for _ in 0..task_count {
+                let udp_socket = self.udp_socket.clone();
+                let sender = self.mailbox_sender.clone();
+                let task =
+                    ring_io::spawn(async move { Self::read_from_udp(udp_socket, sender).await });
+                tasks.push(task);
+            }
 
-                loop {
-                    match self.restart().await {
-                        Err(err) => {
-                            error!(%err, "udp actor restart failed");
-                        }
+            info!("start {task_count} udp reader done");
 
-                        Ok(_) => {
-                            info!("udp actor restart done");
+            for _ in 0..task_count {
+                let udp_socket = self.udp_socket.clone();
+                let mailbox_sender = self.mailbox_sender.clone();
+                let tun_sender = self.tun_sender.clone();
+                let mailbox = self.mailbox.clone();
+                let peer_store = self.peer_store.clone();
+                let local_private_key = self.local_private_key.clone();
+                let heartbeat_interval = self.heartbeat_interval;
 
-                            break;
-                        }
+                let task = ring_io::spawn(Self::run_loop(
+                    udp_socket,
+                    mailbox_sender,
+                    tun_sender,
+                    mailbox,
+                    peer_store,
+                    local_private_key,
+                    heartbeat_interval,
+                ));
+                tasks.push(task);
+            }
+
+            info!("start {task_count} udp writer done");
+
+            while let Some(result) = tasks.next().await {
+                if let Err(err) = result {
+                    error!(%err, "udp actor inner stop with error");
+
+                    break;
+                }
+            }
+
+            tasks.clear();
+
+            error!("udp actor inner stop, need restart");
+
+            loop {
+                match self.restart().await {
+                    Err(err) => {
+                        error!(%err, "udp actor inner restart failed");
+                    }
+
+                    Ok(_) => {
+                        info!("udp actor inner restart done");
+
+                        break;
                     }
                 }
             }
         }
     }
 
-    #[instrument(err)]
-    async fn run_circle(&mut self) -> anyhow::Result<()> {
-        let message = match self.mailbox.next().await {
+    async fn run_loop(
+        udp_socket: Arc<UdpSocket>,
+        udp_mailbox_sender: Sender<Message>,
+        tun_sender: Sender<TunMessage>,
+        mut mailbox: Receiver<Message>,
+        peer_store: PeerStore,
+        local_private_key: Bytes,
+        heartbeat_interval: Duration,
+    ) -> anyhow::Result<()> {
+        loop {
+            Self::run_circle(
+                &udp_socket,
+                &udp_mailbox_sender,
+                &tun_sender,
+                &mut mailbox,
+                &peer_store,
+                &local_private_key,
+                heartbeat_interval,
+            )
+            .await?;
+        }
+    }
+
+    #[instrument(err, skip(mailbox))]
+    async fn run_circle(
+        udp_socket: &UdpSocket,
+        udp_mailbox_sender: &Sender<Message>,
+        tun_sender: &Sender<TunMessage>,
+        mailbox: &mut Receiver<Message>,
+        peer_store: &PeerStore,
+        local_private_key: &Bytes,
+        heartbeat_interval: Duration,
+    ) -> anyhow::Result<()> {
+        let message = match mailbox.next().await {
             None => {
                 error!("receive message from mailbox failed");
 
@@ -168,7 +234,7 @@ impl UdpActor {
             Message::Frame { frame, to } => {
                 let packet = frame.encode_to_vec();
 
-                self.udp_socket
+                udp_socket
                     .send_to(packet, to)
                     .await
                     .0
@@ -198,7 +264,7 @@ impl UdpActor {
 
                 debug!("decode packet done");
 
-                match self.peer_store.get_peer_info_by_cookie(&frame.cookie) {
+                match peer_store.get_peer_info_by_cookie(&frame.cookie) {
                     Some(peer_info) => {
                         match peer_info
                             .sender
@@ -228,12 +294,12 @@ impl UdpActor {
                         match EncryptActor::new(
                             mailbox_sender.clone(),
                             mailbox.into_stream(),
-                            self.mailbox_sender.clone(),
-                            self.tun_sender.clone(),
-                            self.local_private_key.clone(),
+                            udp_mailbox_sender.clone(),
+                            tun_sender.clone(),
+                            local_private_key.clone(),
                             frame,
-                            self.heartbeat_interval,
-                            &self.peer_store,
+                            heartbeat_interval,
+                            peer_store,
                         ) {
                             Err(err) => {
                                 error!(%err, "create encrypt actor failed");
@@ -244,21 +310,16 @@ impl UdpActor {
                             Ok((mut encrypt_actor, response_frame)) => {
                                 let response_packet = response_frame.encode_to_vec();
 
-                                self.udp_socket
-                                    .send_to(response_packet, from)
-                                    .await
-                                    .0
-                                    .tap_err(
-                                        |err| error!(%err, %from, "send packet back failed"),
-                                    )?;
+                                udp_socket.send_to(response_packet, from).await.0.tap_err(
+                                    |err| error!(%err, %from, "send packet back failed"),
+                                )?;
 
                                 debug!(%from, "send packet back done");
 
                                 // make sure next packet can find encrypt actor
-                                self.peer_store
-                                    .add_peer_info(cookie.clone(), from, mailbox_sender);
+                                peer_store.add_peer_info(cookie.clone(), from, mailbox_sender);
 
-                                let peer_store = self.peer_store.clone();
+                                let peer_store = peer_store.clone();
 
                                 ring_io::spawn(async move {
                                     let _ = encrypt_actor.run().await;
