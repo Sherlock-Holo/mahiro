@@ -57,9 +57,7 @@ pub fn block_run() -> anyhow::Result<()> {
         .unwrap_or(NonZeroUsize::new(4).unwrap())
         .get();
 
-    Runtime::new_with_io_uring_builder(&util::io_uring_builder(), threads)
-        .unwrap()
-        .block_on(run())
+    Runtime::new_with(util::io_uring_builder(), threads).block_on(run())
 }
 
 async fn run() -> anyhow::Result<()> {
