@@ -1684,7 +1684,7 @@ checksum = "e3a8614ee435691de62bcffcf4a66d91b3594bf1428a5722e79103249a095690"
 [[package]]
 name = "ring_io"
 version = "0.3.0"
-source = "git+https://github.com/Sherlock-Holo/ring_io.git?branch=master#63f4c7bcb152d583942b6e01bf615160960f558a"
+source = "git+https://github.com/Sherlock-Holo/ring_io.git?branch=master#84cb8a058986f6dedddf87ac2aa493782f670049"
 dependencies = [
  "async-task",
  "bytes",

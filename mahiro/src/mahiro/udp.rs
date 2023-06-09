@@ -9,15 +9,18 @@ use flume::{Sender, TrySendError};
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use prost::Message as _;
-use ring_io::net;
+use ring_io::buf::Builder;
 use ring_io::net::udp::UdpSocket;
+use ring_io::{buf, net};
 use tap::TapFallible;
 use tracing::{debug, error, info, instrument, warn};
 
-use super::message::EncryptMessage;
 use super::message::UdpMessage as Message;
+use super::message::{EncryptMessage, Packet};
 use crate::protocol::Frame;
 use crate::util::Receiver;
+
+const BUFFER_GROUP: u16 = 1;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -28,6 +31,7 @@ pub struct UdpActor {
     encrypt_sender: Sender<EncryptMessage>,
 
     remote_addr: Vec<SocketAddr>,
+    buffer_group: u16,
 
     udp_sockets: Vec<Arc<UdpSocket>>,
 }
@@ -48,12 +52,15 @@ impl UdpActor {
             .tap_err(|err| error!(%err, "lookup host failed"))?
             .collect::<Vec<_>>();
 
+        buf::register_buf_ring(Builder::new(BUFFER_GROUP).buf_len(8192).ring_entries(256)).await?;
+
         let udp_sockets = Self::start(&remote_addr).await?;
         let udp_actor = Self {
             mailbox_sender,
             mailbox,
             encrypt_sender,
             remote_addr,
+            buffer_group: BUFFER_GROUP,
             udp_sockets,
         };
 
@@ -161,11 +168,39 @@ impl UdpActor {
     async fn read_from_udp(
         udp_socket: Arc<UdpSocket>,
         sender: Sender<Message>,
+        buffer_group: u16,
     ) -> anyhow::Result<()> {
-        let mut buf = BytesMut::with_capacity(1500 * 4);
         loop {
-            buf.reserve(1500);
+            let mut recv_stream = udp_socket.recv_multi(buffer_group);
+            while let Some(result) = recv_stream.next().await {
+                let packet = match result {
+                    Err(err) => {
+                        error!(%err, "receive udp socket failed");
 
+                        let _ = sender.try_send(Message::Packet(Err(err)));
+
+                        return Err(anyhow::anyhow!("receive udp socket failed"));
+                    }
+
+                    Ok(buf) => buf,
+                };
+
+                match sender.try_send(Message::Packet(Ok(Packet::Gbuf(packet)))) {
+                    Err(TrySendError::Full(_)) => {
+                        warn!("encrypt actor mailbox full");
+                    }
+
+                    Err(err) => {
+                        error!(%err, "send packet failed");
+
+                        return Err(anyhow::anyhow!("send packet failed"));
+                    }
+
+                    Ok(_) => {}
+                }
+            }
+
+            let mut buf = BytesMut::with_capacity(1500);
             let result = udp_socket.recv(buf).await;
             buf = result.1;
             let result = result.0;
@@ -181,7 +216,13 @@ impl UdpActor {
                 Ok(_) => buf.split().freeze(),
             };
 
-            match sender.try_send(Message::Packet(Ok(packet))) {
+            if packet.is_empty() {
+                error!("udp socket peer is closed");
+
+                return Err(anyhow::anyhow!("udp socket peer is closed"));
+            }
+
+            match sender.try_send(Message::Packet(Ok(Packet::Bytes(packet)))) {
                 Err(TrySendError::Full(_)) => {
                     warn!("encrypt actor mailbox full");
                 }
@@ -207,10 +248,10 @@ impl UdpActor {
                 for udp_socket in &self.udp_sockets {
                     let udp_socket = udp_socket.clone();
                     let sender = self.mailbox_sender.clone();
-                    let task =
-                        ring_io::spawn(
-                            async move { Self::read_from_udp(udp_socket, sender).await },
-                        );
+                    let buffer_group = self.buffer_group;
+                    let task = ring_io::spawn(async move {
+                        Self::read_from_udp(udp_socket, sender, buffer_group).await
+                    });
                     tasks.push(task);
                 }
             }
@@ -299,7 +340,7 @@ impl UdpActor {
             Message::Packet(Err(err)) => Err(err.into()),
 
             Message::Packet(Ok(packet)) => {
-                let frame = match Frame::decode(packet) {
+                let frame = match Frame::decode(packet.as_ref()) {
                     Err(err) => {
                         error!(%err, "decode packet failed");
 
