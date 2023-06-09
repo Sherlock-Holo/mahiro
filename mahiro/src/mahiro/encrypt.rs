@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
+use futures_timer::Delay;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use prost::Message as _;
@@ -116,8 +117,9 @@ impl EncryptActor {
     }
 
     async fn heartbeat(heartbeat_interval: Duration, mailbox_sender: Sender<Message>) {
-        let mut interval = async_timer::interval(heartbeat_interval);
-        while interval.next().await.is_some() {
+        loop {
+            Delay::new(heartbeat_interval).await;
+
             match mailbox_sender.try_send(Message::Heartbeat) {
                 Err(TrySendError::Full(_)) => {
                     warn!("encrypt actor mailbox is full");
@@ -287,7 +289,7 @@ impl EncryptActor {
 
         let mailbox_sender = mailbox_sender.clone();
         ring_io::spawn(async move {
-            (&mut async_timer::interval(handshake_timeout)).await;
+            Delay::new(handshake_timeout).await;
 
             let _ = mailbox_sender.send_async(Message::HandshakeTimeout).await;
         })
@@ -723,7 +725,7 @@ mod tests {
             let transport_state = handshake_state.into_stateless_transport_mode().unwrap();
 
             // make sure encrypt actor finish become transport
-            (&mut async_timer::interval(Duration::from_millis(100))).await;
+            Delay::new(Duration::from_millis(100)).await;
 
             // ---- encrypt send to udp ----
 

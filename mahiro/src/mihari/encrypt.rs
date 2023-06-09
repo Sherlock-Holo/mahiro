@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
+use futures_timer::Delay;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use prost::Message as _;
@@ -203,8 +204,9 @@ impl EncryptActor {
     }
 
     async fn heartbeat(heartbeat_interval: Duration, mailbox_sender: Sender<Message>) {
-        let mut interval = async_timer::interval(heartbeat_interval);
-        while interval.next().await.is_some() {
+        loop {
+            Delay::new(heartbeat_interval).await;
+
             if let Err(err @ TrySendError::Disconnected(_)) =
                 mailbox_sender.try_send(Message::Heartbeat)
             {
