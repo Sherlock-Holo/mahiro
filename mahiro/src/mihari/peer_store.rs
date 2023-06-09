@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -13,7 +13,8 @@ type Cookie = PublicKey;
 
 #[derive(Debug, Clone)]
 pub struct PeerInfo {
-    pub addr: SocketAddr,
+    pub v4_addr: Option<SocketAddrV4>,
+    pub v6_addr: Option<SocketAddrV6>,
     pub sender: Sender<EncryptMessage>,
 }
 
@@ -29,9 +30,20 @@ pub struct PeerStore(Arc<PeetStoreInner>);
 
 impl PeerStore {
     pub fn add_peer_info(&self, cookie: Bytes, addr: SocketAddr, sender: Sender<EncryptMessage>) {
-        self.0
-            .peer_infos
-            .insert(cookie.into(), PeerInfo { addr, sender });
+        let peer_info = match addr {
+            SocketAddr::V4(addr) => PeerInfo {
+                v4_addr: Some(addr),
+                v6_addr: None,
+                sender,
+            },
+            SocketAddr::V6(addr) => PeerInfo {
+                v4_addr: None,
+                v6_addr: Some(addr),
+                sender,
+            },
+        };
+
+        self.0.peer_infos.insert(cookie.into(), peer_info);
     }
 
     pub fn add_mahiro_ip(&self, addr: IpAddr, sender: Sender<EncryptMessage>) {
@@ -65,14 +77,20 @@ impl PeerStore {
         self.0
             .peer_infos
             .get_mut(cookie.as_ref())
-            .and_then(|mut info| {
-                if info.addr == addr {
-                    None
-                } else {
-                    let old_addr = info.addr;
-                    info.addr = addr;
-
-                    Some(old_addr)
+            .and_then(|mut info| match addr {
+                SocketAddr::V4(addr) => {
+                    if info.v4_addr == Some(addr) {
+                        None
+                    } else {
+                        info.v4_addr.replace(addr).map(SocketAddr::V4)
+                    }
+                }
+                SocketAddr::V6(addr) => {
+                    if info.v6_addr == Some(addr) {
+                        None
+                    } else {
+                        info.v6_addr.replace(addr).map(SocketAddr::V6)
+                    }
                 }
             })
     }

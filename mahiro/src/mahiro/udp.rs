@@ -29,7 +29,7 @@ pub struct UdpActor {
 
     remote_addr: Vec<SocketAddr>,
 
-    udp_socket: Arc<UdpSocket>,
+    udp_sockets: Vec<Arc<UdpSocket>>,
 }
 
 impl UdpActor {
@@ -48,48 +48,112 @@ impl UdpActor {
             .tap_err(|err| error!(%err, "lookup host failed"))?
             .collect::<Vec<_>>();
 
-        let udp_socket = Self::start(&remote_addr).await?;
+        let udp_sockets = Self::start(&remote_addr).await?;
         let udp_actor = Self {
             mailbox_sender,
             mailbox,
             encrypt_sender,
             remote_addr,
-            udp_socket,
+            udp_sockets,
         };
 
         Ok(udp_actor)
     }
 
-    async fn start(remote_addr: &[SocketAddr]) -> anyhow::Result<Arc<UdpSocket>> {
-        let udp_socket = UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), 0).into())
-            .tap_err(|err| error!(%err, "bind udp socket failed"))?;
-
+    async fn start(remote_addr: &[SocketAddr]) -> anyhow::Result<Vec<Arc<UdpSocket>>> {
+        let mut ipv6_udp_socket = None;
+        let mut ipv4_udp_socket = None;
         let mut last_err = None;
+
         for &remote_addr in remote_addr {
-            match udp_socket.connect(remote_addr).await {
-                Err(err) => {
-                    last_err = Some(err);
+            match (&mut ipv4_udp_socket, &mut ipv6_udp_socket) {
+                (None, None) => {
+                    let udp_socket = UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), 0).into())
+                        .tap_err(|err| error!(%err, "bind udp socket failed"))?;
+
+                    match udp_socket.connect(remote_addr).await {
+                        Err(err) => {
+                            last_err = Some(err);
+                        }
+
+                        Ok(_) => {
+                            last_err.take();
+
+                            if remote_addr.is_ipv4() {
+                                ipv4_udp_socket = Some(udp_socket);
+                            } else {
+                                ipv6_udp_socket = Some(udp_socket);
+                            }
+                        }
+                    }
                 }
 
-                Ok(_) => {
-                    last_err.take();
+                (None, Some(_)) => {
+                    if remote_addr.is_ipv6() {
+                        continue;
+                    }
+
+                    let udp_socket = UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), 0).into())
+                        .tap_err(|err| error!(%err, "bind udp socket failed"))?;
+
+                    match udp_socket.connect(remote_addr).await {
+                        Err(err) => {
+                            last_err = Some(err);
+                        }
+
+                        Ok(_) => {
+                            last_err.take();
+                            ipv4_udp_socket = Some(udp_socket);
+
+                            break;
+                        }
+                    }
                 }
+
+                (Some(_), None) => {
+                    if remote_addr.is_ipv4() {
+                        continue;
+                    }
+
+                    let udp_socket = UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), 0).into())
+                        .tap_err(|err| error!(%err, "bind udp socket failed"))?;
+
+                    match udp_socket.connect(remote_addr).await {
+                        Err(err) => {
+                            last_err = Some(err);
+                        }
+
+                        Ok(_) => {
+                            last_err.take();
+                            ipv6_udp_socket = Some(udp_socket);
+
+                            break;
+                        }
+                    }
+                }
+
+                (Some(_), Some(_)) => unreachable!(),
             }
         }
+
         if let Some(err) = last_err {
             error!(%err, ?remote_addr, "udp connect failed");
 
             return Err(err.into());
         }
 
-        let udp_socket = Arc::new(udp_socket);
+        let udp_sockets = ipv4_udp_socket
+            .into_iter()
+            .chain(ipv6_udp_socket.into_iter())
+            .map(Arc::new)
+            .collect::<Vec<_>>();
 
-        Ok(udp_socket)
+        Ok(udp_sockets)
     }
 
     async fn restart(&mut self) -> anyhow::Result<()> {
-        let udp_socket = Self::start(&self.remote_addr).await?;
-        self.udp_socket = udp_socket;
+        let udp_sockets = Self::start(&self.remote_addr).await?;
+        self.udp_sockets = udp_sockets;
 
         Ok(())
     }
@@ -140,22 +204,28 @@ impl UdpActor {
             .get();
         loop {
             for _ in 0..task_count {
-                let udp_socket = self.udp_socket.clone();
-                let sender = self.mailbox_sender.clone();
-                let task =
-                    ring_io::spawn(async move { Self::read_from_udp(udp_socket, sender).await });
-                tasks.push(task);
+                for udp_socket in &self.udp_sockets {
+                    let udp_socket = udp_socket.clone();
+                    let sender = self.mailbox_sender.clone();
+                    let task =
+                        ring_io::spawn(
+                            async move { Self::read_from_udp(udp_socket, sender).await },
+                        );
+                    tasks.push(task);
+                }
             }
 
             info!("start {task_count} udp reader done");
 
             for _ in 0..task_count {
-                let mailbox = self.mailbox.clone();
-                let udp_socket = self.udp_socket.clone();
-                let encrypt_sender = self.encrypt_sender.clone();
+                for udp_socket in &self.udp_sockets {
+                    let mailbox = self.mailbox.clone();
+                    let udp_socket = udp_socket.clone();
+                    let encrypt_sender = self.encrypt_sender.clone();
 
-                let task = ring_io::spawn(Self::run_loop(udp_socket, encrypt_sender, mailbox));
-                tasks.push(task);
+                    let task = ring_io::spawn(Self::run_loop(udp_socket, encrypt_sender, mailbox));
+                    tasks.push(task);
+                }
             }
 
             info!("start {task_count} udp writer done");

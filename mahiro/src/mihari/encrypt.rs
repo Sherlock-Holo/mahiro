@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use futures_timer::Delay;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use prost::Message as _;
+use rand::prelude::{thread_rng, SliceRandom};
 use tap::TapFallible;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
@@ -233,7 +234,7 @@ struct HandleTransportFrameArgs<'a> {
 fn get_peer_addr_by_cookie(
     connected_peers: &PeerStore,
     cookie: &Bytes,
-) -> anyhow::Result<SocketAddr> {
+) -> anyhow::Result<(Option<SocketAddrV4>, Option<SocketAddrV6>)> {
     match connected_peers.get_peer_info_by_cookie(cookie) {
         None => {
             error!("peer info miss, encrypt actor in invalid status");
@@ -243,7 +244,19 @@ fn get_peer_addr_by_cookie(
             ))
         }
 
-        Some(peer_info) => Ok(peer_info.addr),
+        Some(peer_info) => Ok((peer_info.v4_addr, peer_info.v6_addr)),
+    }
+}
+
+fn choose_addr_random(v4: Option<SocketAddrV4>, v6: Option<SocketAddrV6>) -> SocketAddr {
+    match (v4, v6) {
+        (None, Some(addr)) => SocketAddr::V6(addr),
+        (Some(addr), None) => SocketAddr::V4(addr),
+        (Some(v4), Some(v6)) => *[SocketAddr::V4(v4), SocketAddr::V6(v6)]
+            .choose(&mut thread_rng())
+            .unwrap(),
+
+        (None, None) => unreachable!(),
     }
 }
 
@@ -287,7 +300,9 @@ impl EncryptActorTransportInner {
 
         match message {
             Message::Packet(packet) => {
-                let remote_addr = get_peer_addr_by_cookie(&self.peer_store, &self.cookie)?;
+                let (remote_addr_v4, remote_addr_v6) =
+                    get_peer_addr_by_cookie(&self.peer_store, &self.cookie)?;
+                let remote_addr = choose_addr_random(remote_addr_v4, remote_addr_v6);
 
                 Self::handle_transport_packet(
                     &self.cookie,
@@ -326,7 +341,9 @@ impl EncryptActorTransportInner {
             }
 
             Message::Heartbeat => {
-                let remote_addr = get_peer_addr_by_cookie(&self.peer_store, &self.cookie)?;
+                let (remote_addr_v4, remote_addr_v6) =
+                    get_peer_addr_by_cookie(&self.peer_store, &self.cookie)?;
+                let remote_addr = choose_addr_random(remote_addr_v4, remote_addr_v6);
 
                 Self::handle_transport_heartbeat(
                     &self.cookie,
