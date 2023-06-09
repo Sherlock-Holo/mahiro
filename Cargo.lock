@@ -1127,7 +1127,6 @@ dependencies = [
  "test-log",
  "thiserror",
  "tokio",
- "tokio-stream",
  "tracing",
  "tracing-log",
  "tracing-subscriber",
@@ -1685,7 +1684,7 @@ checksum = "e3a8614ee435691de62bcffcf4a66d91b3594bf1428a5722e79103249a095690"
 [[package]]
 name = "ring_io"
 version = "0.3.0"
-source = "git+https://github.com/Sherlock-Holo/ring_io.git?branch=master#05609f2b52df6a3933179e129379dfe5ed9c52a5"
+source = "git+https://github.com/Sherlock-Holo/ring_io.git?branch=master#63f4c7bcb152d583942b6e01bf615160960f558a"
 dependencies = [
  "async-task",
  "bytes",

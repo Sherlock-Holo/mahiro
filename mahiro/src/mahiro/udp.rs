@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::thread::available_parallelism;
@@ -9,10 +9,9 @@ use flume::{Sender, TrySendError};
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use prost::Message as _;
+use ring_io::net;
 use ring_io::net::udp::UdpSocket;
 use tap::TapFallible;
-use tokio::net;
-use tokio::net::ToSocketAddrs;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::message::EncryptMessage;
@@ -34,13 +33,17 @@ pub struct UdpActor {
 }
 
 impl UdpActor {
-    pub async fn new(
+    pub async fn new<A>(
         encrypt_sender: Sender<EncryptMessage>,
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
-        remote_addr: impl ToSocketAddrs,
-    ) -> anyhow::Result<Self> {
-        let remote_addr = net::lookup_host(remote_addr)
+        remote_addr: A,
+    ) -> anyhow::Result<Self>
+    where
+        A: ToSocketAddrs + Send + 'static,
+        A::Iter: Send + 'static,
+    {
+        let remote_addr = net::to_socket_addrs(remote_addr)
             .await
             .tap_err(|err| error!(%err, "lookup host failed"))?
             .collect::<Vec<_>>();

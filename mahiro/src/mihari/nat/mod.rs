@@ -12,14 +12,13 @@ use aya::Bpf;
 use aya_log::BpfLogger;
 use derivative::Derivative;
 use either::Either;
+use futures_timer::Delay;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use ipnet::{Ipv4Net, Ipv6Net};
 use netlink_packet_route::address::Nla;
 use netlink_packet_route::link::nlas::Nla as LinkNla;
 use rtnetlink::{AddressHandle, Handle, LinkHandle};
 use tap::TapFallible;
-use tokio::time;
-use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info};
 use tracing_log::LogTracer;
 
@@ -287,15 +286,13 @@ impl NatActor {
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        let mut interval_stream = IntervalStream::new(time::interval(WATCH_INTERVAL));
-
-        while (interval_stream.next().await).is_some() {
+        loop {
             if let Err(err) = self.run_circle().await {
                 error!(%err, "update nic addr failed");
             }
-        }
 
-        unreachable!("interval stream stopped")
+            Delay::new(WATCH_INTERVAL).await;
+        }
     }
 
     async fn run_circle(&mut self) -> anyhow::Result<()> {
