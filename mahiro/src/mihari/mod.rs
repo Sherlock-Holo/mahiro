@@ -109,7 +109,13 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
                 bpf,
             )?;
 
-            tasks.push(ring_io::spawn(async move { nat_actor.run().await }));
+            let task = ring_io::spawn_blocking(move || {
+                let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+
+                runtime.block_on(async move { nat_actor.run().await })
+            });
+
+            tasks.push(task);
         }
     }
 
