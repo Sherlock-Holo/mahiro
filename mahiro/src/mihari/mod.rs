@@ -99,20 +99,22 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
         })?;
 
         if bpf_nat {
-            let mut nat_actor = NatActor::new(
-                handle,
-                config.local_ipv4,
-                config.local_ipv6,
-                HashSet::from_iter(config.nic_list.unwrap_or_default()),
-                bpf_forward,
-                &config.tun_name,
-                bpf,
-            )?;
-
             let task = ring_io::spawn_blocking(move || {
                 let runtime = Builder::new_current_thread().enable_all().build().unwrap();
 
-                runtime.block_on(async move { nat_actor.run().await })
+                runtime.block_on(async move {
+                    let mut nat_actor = NatActor::new(
+                        handle,
+                        config.local_ipv4,
+                        config.local_ipv6,
+                        HashSet::from_iter(config.nic_list.unwrap_or_default()),
+                        bpf_forward,
+                        &config.tun_name,
+                        bpf,
+                    )?;
+
+                    nat_actor.run().await
+                })
             });
 
             tasks.push(task);
