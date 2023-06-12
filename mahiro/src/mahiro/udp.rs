@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::thread::available_parallelism;
@@ -73,9 +73,15 @@ impl UdpActor {
         let mut last_err = None;
 
         for &remote_addr in remote_addr {
+            let bind_addr = if remote_addr.is_ipv4() {
+                SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)
+            } else {
+                SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0)
+            };
+
             match (&mut ipv4_udp_socket, &mut ipv6_udp_socket) {
                 (None, None) => {
-                    let udp_socket = UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), 0).into())
+                    let udp_socket = UdpSocket::bind(bind_addr)
                         .tap_err(|err| error!(%err, "bind udp socket failed"))?;
 
                     match udp_socket.connect(remote_addr).await {
@@ -100,7 +106,7 @@ impl UdpActor {
                         continue;
                     }
 
-                    let udp_socket = UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), 0).into())
+                    let udp_socket = UdpSocket::bind(bind_addr)
                         .tap_err(|err| error!(%err, "bind udp socket failed"))?;
 
                     match udp_socket.connect(remote_addr).await {
@@ -122,7 +128,7 @@ impl UdpActor {
                         continue;
                     }
 
-                    let udp_socket = UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), 0).into())
+                    let udp_socket = UdpSocket::bind(bind_addr)
                         .tap_err(|err| error!(%err, "bind udp socket failed"))?;
 
                     match udp_socket.connect(remote_addr).await {
