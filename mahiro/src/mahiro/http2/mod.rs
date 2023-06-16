@@ -160,6 +160,10 @@ impl Http2TransportActor {
                 .await
                 .tap_err(|err| error!(%err, "transport rx failed"))?
             {
+                if data.is_empty() {
+                    break;
+                }
+
                 if let Err(TrySendError::Disconnected(_)) =
                     tun_sender.try_send(TunMessage::ToTun(data))
                 {

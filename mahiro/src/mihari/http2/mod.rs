@@ -137,6 +137,10 @@ impl Http2TransportActorInner {
             .await
             .tap_err(|err| error!(%err, "receive packet from transport rx failed"))?
         {
+            if packet.is_empty() {
+                break;
+            }
+
             match get_packet_ip(&packet, IpLocation::Src) {
                 None => {
                     warn!("drop not ip packet");
@@ -170,7 +174,7 @@ impl Http2TransportActorInner {
             }
         }
 
-        Err(anyhow::anyhow!("transport rx stopped"))
+        Ok(())
     }
 
     async fn tun_to_transport(
