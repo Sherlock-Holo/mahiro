@@ -18,18 +18,17 @@ use tokio::task::JoinSet;
 use tracing::{error, info, instrument, warn};
 
 pub use self::auth::AuthStore;
-use self::tls_accept::TlsAcceptor;
 use super::message::Http2Message as Message;
 use super::message::TunMessage;
 use super::peer_store::PeerStore;
 use crate::ip_packet::{get_packet_ip, IpLocation};
+use crate::tls_accept::TlsAcceptor;
 use crate::util::{
     Receiver, HMAC_HEADER, INITIAL_CONNECTION_WINDOW_SIZE, INITIAL_WINDOW_SIZE, MAX_FRAME_SIZE,
     PUBLIC_ID_HEADER,
 };
 
 mod auth;
-mod tls_accept;
 
 pub struct Http2TransportActor {
     inner: Arc<Http2TransportActorInner>,
@@ -176,7 +175,7 @@ impl Http2TransportActorInner {
     }
 
     #[instrument]
-    fn auth_token<'a>(&'a self, request: &'a Request<Body>) -> Option<&'a str> {
+    fn auth_token<'a>(&self, request: &'a Request<Body>) -> Option<&'a str> {
         let hmac = match request.headers().get(HMAC_HEADER) {
             None => {
                 error!("the h2 request doesn't have hmac header, reject it");

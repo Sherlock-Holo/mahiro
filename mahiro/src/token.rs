@@ -1,6 +1,6 @@
 use totp_rs::{Algorithm, TOTP};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TokenGenerator {
     totp: TOTP,
 }

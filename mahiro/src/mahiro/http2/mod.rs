@@ -192,3 +192,173 @@ impl Http2TransportActor {
         join_set.shutdown().await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+    use std::future;
+    use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use http::Response;
+    use hyper::service::{make_service_fn, service_fn};
+    use hyper::Server;
+    use rustls::{Certificate, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerConfig};
+    use tokio::fs;
+    use tokio::net::TcpListener;
+    use webpki::TrustAnchor;
+
+    use super::*;
+    use crate::tls_accept::TlsAcceptor;
+
+    #[tokio::test]
+    async fn test() {
+        const TEST_SECRET: &str = "testtesttesttest";
+        const HEARTBEAT: Duration = Duration::from_secs(5);
+        const LISTEN_ADDR: SocketAddr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 12001);
+        const PUBLIC_ID: &str = "public id";
+
+        let token_generator = TokenGenerator::new(TEST_SECRET.to_string(), None).unwrap();
+        let token_generator_clone = token_generator.clone();
+        let tls_client_config = create_tls_client_config().await.unwrap();
+        let tls_server_config = create_tls_server_config().await.unwrap();
+
+        let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_server_config));
+        let tcp_listener = TcpListener::bind(LISTEN_ADDR).await.unwrap();
+        let tls_acceptor = TlsAcceptor::new(tcp_listener, tls_acceptor);
+
+        let builder = Server::builder(tls_acceptor)
+            .http2_initial_stream_window_size(INITIAL_WINDOW_SIZE)
+            .http2_initial_connection_window_size(INITIAL_CONNECTION_WINDOW_SIZE)
+            .http2_max_frame_size(MAX_FRAME_SIZE)
+            .http2_keep_alive_timeout(HEARTBEAT)
+            .http2_keep_alive_interval(HEARTBEAT);
+
+        let (body_tx, body_rx) = flume::bounded(1);
+
+        tokio::spawn(async move {
+            builder
+                .serve(make_service_fn(move |_conn| {
+                    let body_tx = body_tx.clone();
+                    let token_generator_clone = token_generator_clone.clone();
+
+                    future::ready(Ok::<_, Infallible>(service_fn(
+                        move |req: Request<Body>| {
+                            let body_tx = body_tx.clone();
+                            let token_generator_clone = token_generator_clone.clone();
+
+                            async move {
+                                assert_eq!(req.version(), Version::HTTP_2);
+
+                                let hmac =
+                                    req.headers().get(HMAC_HEADER).unwrap().to_str().unwrap();
+                                assert_eq!(token_generator_clone.generate_token(), hmac);
+
+                                let public_id = req
+                                    .headers()
+                                    .get(PUBLIC_ID_HEADER)
+                                    .unwrap()
+                                    .to_str()
+                                    .unwrap();
+                                assert_eq!(public_id, PUBLIC_ID);
+
+                                let mut body = req.into_body();
+                                let (mut sender, resp_body) = Body::channel();
+                                sender.try_send_data(Bytes::from_static(b"test")).unwrap();
+
+                                tokio::spawn(async move {
+                                    let data = body.next().await.unwrap().unwrap();
+                                    body_tx.send_async(data).await.unwrap();
+                                });
+
+                                Ok::<_, Infallible>(Response::new(resp_body))
+                            }
+                        },
+                    )))
+                }))
+                .await
+        });
+
+        let (http2_transport_sender, http2_transport_mailbox) = flume::unbounded();
+        let (tun_sender, tun_mailbox) = flume::unbounded();
+        let mut http2transport_actor = Http2TransportActor::new(
+            tls_client_config,
+            "https://localhost:12001".to_string(),
+            PUBLIC_ID.to_string(),
+            token_generator,
+            HEARTBEAT,
+            http2_transport_mailbox.into_stream(),
+            tun_sender,
+        )
+        .unwrap();
+
+        tokio::spawn(async move { http2transport_actor.run().await });
+
+        http2_transport_sender
+            .send_async(Message::Packet(Bytes::from_static(b"test")))
+            .await
+            .unwrap();
+
+        let TunMessage::ToTun(tun_packet) = tun_mailbox.recv_async().await.unwrap();
+        assert_eq!(tun_packet.as_ref(), b"test");
+        let body = body_rx.recv_async().await.unwrap();
+        assert_eq!(body.as_ref(), b"test");
+    }
+
+    async fn create_tls_client_config() -> anyhow::Result<ClientConfig> {
+        let mut store = RootCertStore::empty();
+        for cert in rustls_native_certs::load_native_certs()? {
+            store.add(&Certificate(cert.0))?;
+        }
+
+        let ca_cert = fs::read("../testdata/ca.cert").await?;
+        let ca_certs = rustls_pemfile::certs(&mut ca_cert.as_slice())?;
+
+        let ca_certs = ca_certs
+            .iter()
+            .map(|cert| {
+                let ta = TrustAnchor::try_from_cert_der(cert)?;
+
+                Ok::<_, anyhow::Error>(OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    ta.subject,
+                    ta.spki,
+                    ta.name_constraints,
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        store.add_server_trust_anchors(ca_certs.into_iter());
+
+        let client_config = ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(store)
+            .with_no_client_auth();
+
+        Ok(client_config)
+    }
+
+    async fn create_tls_server_config() -> anyhow::Result<ServerConfig> {
+        let mut keys = load_keys().await?;
+        let certs = load_certs().await?;
+
+        Ok(ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(certs, keys.remove(0))?)
+    }
+
+    async fn load_certs() -> anyhow::Result<Vec<Certificate>> {
+        let certs = fs::read("../testdata/server.cert").await?;
+        let mut certs = rustls_pemfile::certs(&mut certs.as_slice())?;
+
+        Ok(certs.drain(..).map(Certificate).collect())
+    }
+
+    async fn load_keys() -> anyhow::Result<Vec<PrivateKey>> {
+        let keys = fs::read("../testdata/server.key").await?;
+        let mut keys = rustls_pemfile::pkcs8_private_keys(&mut keys.as_slice())?;
+
+        Ok(keys.drain(..).map(PrivateKey).collect())
+    }
+}
