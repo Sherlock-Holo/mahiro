@@ -1,9 +1,10 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
+use ipnet::{Ipv4Net, Ipv6Net};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
-use serde_with::serde_as;
+use serde_with::{serde_as, DisplayFromStr};
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
