@@ -5,35 +5,35 @@
 use std::io;
 use std::path::Path;
 
-use base64::prelude::BASE64_STANDARD;
-use base64::Engine;
 use clap::Parser;
-use tokio::fs;
+use time::macros::format_description;
+use time::UtcOffset;
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber;
+use tracing_subscriber::fmt::time::OffsetTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{fmt, Registry};
 
 use self::args::{Args, Command, LogLevel};
-use self::encrypt::Encrypt;
 
 mod args;
-mod cookie;
-mod encrypt;
 mod ip_packet;
 mod mahiro;
 mod mihari;
-mod protocol;
 mod public_key;
-mod timestamp;
+mod token;
 mod tun;
 mod util;
 
-const HEARTBEAT_DATA: &[u8] = b"onimai";
-
 fn init_log(log_level: LogLevel) {
+    let offset = UtcOffset::from_hms(8, 0, 0).unwrap();
+    let format = format_description!(
+        "[year]-[month]-[day] [hour repr:24]:[minute]:[second].[subsecond digits:6]"
+    );
+
     let layer = fmt::layer()
         .pretty()
+        .with_timer(OffsetTime::new(offset, format))
         .with_target(true)
         .with_writer(io::stderr);
 
@@ -62,15 +62,5 @@ pub async fn run() -> anyhow::Result<()> {
             bpf_nat,
             bpf_forward,
         } => mihari::run(Path::new(&config), bpf_nat, bpf_forward).await,
-        Command::Genkey { private, public } => generate_keypair(&private, &public).await,
     }
-}
-
-async fn generate_keypair(private: &str, public: &str) -> anyhow::Result<()> {
-    let keypair = Encrypt::generate_keypair()?;
-
-    fs::write(private, BASE64_STANDARD.encode(keypair.private)).await?;
-    fs::write(public, BASE64_STANDARD.encode(keypair.public)).await?;
-
-    Ok(())
 }
