@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 use super::message::TunMessage as Message;
 use crate::ip_packet;
 use crate::ip_packet::IpLocation;
-use crate::mahiro::message::EncryptMessage;
+use crate::mahiro::message::Http2Message;
 use crate::tun::{Tun, TunReader, TunWriter};
 use crate::util::Receiver;
 
@@ -30,7 +30,7 @@ pub struct TunActor {
     mailbox_sender: Sender<Message>,
     #[derivative(Debug = "ignore")]
     mailbox: Receiver<Message>,
-    encrypt_sender: Sender<EncryptMessage>,
+    encrypt_sender: Sender<Http2Message>,
 
     tun_config: TunConfig,
 
@@ -40,7 +40,7 @@ pub struct TunActor {
 
 impl TunActor {
     pub async fn new(
-        encrypt_sender: Sender<EncryptMessage>,
+        encrypt_sender: Sender<Http2Message>,
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
         tun_config: TunConfig,
@@ -85,7 +85,7 @@ impl TunActor {
 
     async fn read_from_tun(
         mut tun_reader: TunReader,
-        encrypt_sender: Sender<EncryptMessage>,
+        encrypt_sender: Sender<Http2Message>,
     ) -> anyhow::Result<()> {
         let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
@@ -121,7 +121,7 @@ impl TunActor {
                 Some(ip) => ip,
             };
 
-            match encrypt_sender.try_send(EncryptMessage::Packet(packet)) {
+            match encrypt_sender.try_send(Http2Message::Packet(packet)) {
                 Err(TrySendError::Full(_)) => {
                     warn!("encrypt actor mailbox is full");
                 }
@@ -262,9 +262,9 @@ mod tests {
         };
 
         let (mailbox_sender, mailbox) = flume::bounded(10);
-        let (encrypt_sender, encrypt_mailbox) = flume::bounded(10);
+        let (http2_transport_sender, http2_transport_mailbox) = flume::bounded(10);
         let mut tun_actor = TunActor::new(
-            encrypt_sender,
+            http2_transport_sender,
             mailbox_sender.clone(),
             mailbox.into_stream(),
             tun_config,
@@ -274,18 +274,14 @@ mod tests {
 
         tokio::spawn(async move { tun_actor.run().await });
 
-        let mut encrypt_mailbox = encrypt_mailbox.into_stream();
+        let mut encrypt_mailbox = http2_transport_mailbox.into_stream();
 
         let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
         udp_socket.connect("192.168.1.2:8888").await.unwrap();
         udp_socket.send(b"test").await.unwrap();
 
         loop {
-            let encrypt_message = encrypt_mailbox.next().await.unwrap();
-            let packet = match encrypt_message {
-                EncryptMessage::Packet(packet) => packet,
-                _ => panic!("other encrypt message"),
-            };
+            let Http2Message::Packet(packet) = encrypt_mailbox.next().await.unwrap();
             let first = packet[0];
             if (first >> 4) != 0b100 {
                 continue;
