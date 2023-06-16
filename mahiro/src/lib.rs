@@ -10,6 +10,7 @@ use time::macros::format_description;
 use time::UtcOffset;
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::time::OffsetTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{fmt, Registry};
@@ -46,7 +47,11 @@ fn init_log(log_level: LogLevel) {
         LogLevel::None => LevelFilter::OFF,
     };
 
-    let layered = Registry::default().with(layer).with(level);
+    let targets = Targets::new()
+        .with_target("h2", LevelFilter::OFF)
+        .with_default(LevelFilter::DEBUG);
+
+    let layered = Registry::default().with(targets).with(layer).with(level);
 
     subscriber::set_global_default(layered).unwrap();
 }
