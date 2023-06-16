@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use flume::{Sender, TrySendError};
 use futures_util::{StreamExt, TryStreamExt};
-use http::{Request, Response, StatusCode, Version};
+use http::{Method, Request, Response, StatusCode, Version};
 use hyper::server::Builder;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Server};
@@ -64,6 +64,16 @@ impl Http2TransportActorInner {
 
             Some(public_id) => public_id,
         };
+
+        let method = request.method();
+        if method != Method::POST {
+            error!(%method, "reject not POST method http2 request");
+
+            let mut response = Response::new(Body::empty());
+            *response.status_mut() = StatusCode::UNAUTHORIZED;
+
+            return response;
+        }
 
         info!("http2 auth done");
 
