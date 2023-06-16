@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
 use totp_rs::{Algorithm, TOTP};
+use tracing::{error, instrument};
 
 #[derive(Debug)]
 pub struct AuthStore {
@@ -22,11 +23,17 @@ impl AuthStore {
         Ok(Self { auths })
     }
 
+    #[instrument]
     pub fn auth(&self, public_id: &str, hmac: &str) -> bool {
-        self.auths
-            .get(public_id)
-            .map(|auth| auth.auth(hmac))
-            .unwrap_or(false)
+        match self.auths.get(public_id) {
+            None => {
+                error!("public id not found");
+
+                false
+            }
+
+            Some(auth) => auth.auth(hmac),
+        }
     }
 }
 
@@ -73,50 +80,25 @@ mod tests {
 
     #[test]
     fn check_auth() {
-        let secret = "test-secrettest-secret".to_string();
-        let account_name = "test".to_string();
-
+        let auth_store = AuthStore::new([(
+            "public-id".to_string(),
+            "test-secrettest-secret".to_string(),
+        )])
+        .unwrap();
         let totp = TOTP::new(
             Algorithm::SHA512,
             8,
             1,
             30,
-            secret.clone().into_bytes(),
+            "test-secrettest-secret".to_string().into_bytes(),
             None,
-            account_name.clone(),
+            "default_account".to_string(),
         )
         .unwrap();
 
-        let auth = Auth::new(secret, account_name).unwrap();
-
         let token = totp.generate_current().unwrap();
-
         dbg!(&token);
 
-        assert!(auth.auth(&token));
-    }
-
-    #[test]
-    fn check_auth_with_different_account_name() {
-        let secret = "test-secrettest-secret".to_string();
-
-        let totp = TOTP::new(
-            Algorithm::SHA512,
-            8,
-            1,
-            30,
-            secret.clone().into_bytes(),
-            None,
-            "test".to_string(),
-        )
-        .unwrap();
-
-        let auth = Auth::new(secret, None).unwrap();
-
-        let token = totp.generate_current().unwrap();
-
-        dbg!(&token);
-
-        assert!(auth.auth(&token));
+        assert!(auth_store.auth("public-id", &token));
     }
 }

@@ -11,11 +11,11 @@ use hyper::server::Builder;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Server};
 use rustls::{Certificate, PrivateKey, ServerConfig};
-use tap::TapFallible;
+use tap::{TapFallible, TapOptional};
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 pub use self::auth::AuthStore;
 use super::message::Http2Message as Message;
@@ -44,7 +44,10 @@ struct Http2TransportActorInner {
 }
 
 impl Http2TransportActorInner {
+    #[instrument]
     async fn handle(&self, request: Request<Body>) -> Response<Body> {
+        debug!(?request, "accept new http request");
+
         if request.version() != Version::HTTP_2 {
             error!("reject not http2 request");
 
@@ -195,7 +198,7 @@ impl Http2TransportActorInner {
 
             Some(hmac) => match hmac.to_str() {
                 Err(err) => {
-                    error!(%err,"hmac is not valid utf8 string");
+                    error!(%err, "hmac is not valid utf8 string");
 
                     return None;
                 }
@@ -213,7 +216,7 @@ impl Http2TransportActorInner {
 
             Some(public_id) => match public_id.to_str() {
                 Err(err) => {
-                    error!(%err,"public id is not valid utf8 string");
+                    error!(%err, "public id is not valid utf8 string");
 
                     return None;
                 }
@@ -222,7 +225,10 @@ impl Http2TransportActorInner {
             },
         };
 
-        self.auth_store.auth(public_id, hmac).then_some(public_id)
+        self.auth_store
+            .auth(public_id, hmac)
+            .then_some(public_id)
+            .tap_none(|| error!(public_id, hmac, "auth failed"))
     }
 }
 
@@ -243,6 +249,8 @@ impl Http2TransportActor {
             .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(certs, keys.remove(0))?;
+
+        info!("create server config done");
 
         let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
         let tcp_listener = TcpListener::bind(listen_addr).await?;
@@ -271,6 +279,8 @@ impl Http2TransportActor {
         let inner = self.inner.clone();
 
         let builder = self.builder.take().expect("server has been stopped");
+
+        info!("start http2 transport actor");
 
         builder
             .serve(make_service_fn(move |_conn| {
