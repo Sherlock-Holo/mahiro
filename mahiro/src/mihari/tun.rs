@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, warn};
 
-use super::message::EncryptMessage;
+use super::message::Http2Message;
 use super::message::TunMessage as Message;
 use super::peer_store::PeerStore;
 use crate::ip_packet;
@@ -128,7 +128,7 @@ impl TunActor {
                         }
                     }
 
-                    let sender = match peer_store.get_sender_by_mahiro_ip(ip) {
+                    let sender = match peer_store.get_http2_transport_sender_by_mahiro_ip(ip) {
                         None => {
                             debug!(%ip, "ip doesn't in connected peers, maybe peer is disconnected, drop it");
 
@@ -138,7 +138,7 @@ impl TunActor {
                         Some(sender) => sender,
                     };
 
-                    match sender.try_send(EncryptMessage::Packet(packet)) {
+                    match sender.try_send(Http2Message::Packet(packet)) {
                         Err(TrySendError::Full(_)) => {
                             warn!("encrypt actor mailbox is full");
                         }

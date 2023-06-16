@@ -8,20 +8,18 @@ use tokio::task::JoinSet;
 use tracing::{error, info};
 
 use self::config::Config;
+use self::http2::{AuthStore, Http2TransportActor};
 use self::nat::NatActor;
 use self::peer_store::PeerStore;
 use self::tun::TunActor;
-use self::udp::UdpActor;
-use crate::public_key::PublicKey;
 use crate::util;
 
 mod config;
-mod encrypt;
+mod http2;
 mod message;
 mod nat;
 mod peer_store;
 mod tun;
-mod udp;
 
 pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Result<()> {
     let config_data = fs::read(config).await?;
@@ -31,14 +29,19 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     tokio::spawn(conn);
 
     let (tun_sender, tun_mailbox) = flume::bounded(64);
-    let (udp_sender, udp_mailbox) = flume::bounded(64);
 
-    let peer_store = PeerStore::from(config.peers.into_iter().map(|peer| {
-        (
-            PublicKey::from(peer.remote_public_key),
-            (peer.peer_ipv4, peer.peer_ipv6),
-        )
-    }));
+    let peer_store = PeerStore::new(
+        config
+            .peers
+            .iter()
+            .map(|peer| (peer.public_id.clone(), peer.peer_ipv4, peer.peer_ipv6)),
+    );
+    let auth_store = AuthStore::new(
+        config
+            .peers
+            .into_iter()
+            .map(|peer| (peer.public_id, peer.token_secret)),
+    )?;
 
     let mut tun_actor = TunActor::new(
         tun_sender.clone(),
@@ -51,13 +54,13 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     )
     .await?;
 
-    let mut udp_actor = UdpActor::new(
-        udp_sender,
-        udp_mailbox.into_stream(),
-        peer_store,
+    let mut http2transport_actor = Http2TransportActor::new(
         tun_sender,
+        auth_store,
+        peer_store,
         config.listen_addr,
-        config.local_private_key,
+        &config.cert,
+        &config.key,
         config.heartbeat_interval,
     )
     .await?;
@@ -68,11 +71,7 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
 
         Ok(())
     });
-    join_set.spawn(async move {
-        udp_actor.run().await;
-
-        Ok(())
-    });
+    join_set.spawn(async move { http2transport_actor.run().await });
 
     if bpf_nat || bpf_forward {
         info!(bpf_nat, bpf_forward, "enable bpf nat mode");

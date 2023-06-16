@@ -1,89 +1,103 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::fmt::{Debug, Formatter};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
-use bytes::Bytes;
 use dashmap::DashMap;
 use flume::Sender;
 
-use super::message::EncryptMessage;
-use crate::public_key::PublicKey;
+use super::message::Http2Message;
+use crate::util::Receiver;
 
-type Cookie = PublicKey;
-
-#[derive(Debug, Clone)]
-pub struct PeerInfo {
-    pub addr: SocketAddr,
-    pub sender: Sender<EncryptMessage>,
+#[derive(Clone, Debug)]
+pub struct PeerStore {
+    inner: Arc<PeerStoreInner>,
 }
-
-#[derive(Debug)]
-struct PeetStoreInner {
-    static_peer_mahiro_ips: HashMap<PublicKey, (Ipv4Addr, Ipv6Addr)>,
-    peer_infos: DashMap<Cookie, PeerInfo>,
-    mahiro_ips: DashMap<IpAddr, Sender<EncryptMessage>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PeerStore(Arc<PeetStoreInner>);
 
 impl PeerStore {
-    pub fn add_peer_info(&self, cookie: Bytes, addr: SocketAddr, sender: Sender<EncryptMessage>) {
-        self.0
-            .peer_infos
-            .insert(cookie.into(), PeerInfo { addr, sender });
-    }
+    pub fn new<I: IntoIterator<Item = (String, Ipv4Addr, Ipv6Addr)>>(peers_iter: I) -> Self {
+        let mut peers = HashMap::new();
+        let mut mahiro_ipv4s = HashMap::new();
+        let mut mahiro_ipv6s = HashMap::new();
 
-    pub fn add_mahiro_ip(&self, addr: IpAddr, sender: Sender<EncryptMessage>) {
-        self.0.mahiro_ips.insert(addr, sender);
-    }
+        for (public_id, mahiro_ipv4, mahiro_ipv6) in peers_iter.into_iter() {
+            let (http2_transport_sender, http2_transport_receiver) = flume::bounded(64);
+            let peer_channel = Arc::new(PeerChannel {
+                http2_transport_sender,
+                http2_transport_receiver: http2_transport_receiver.into_stream(),
+            });
 
-    pub fn remove_peer(&self, cookie: &Bytes) {
-        if let Some((_, sender)) = self.0.peer_infos.remove(cookie.as_ref()) {
-            self.0
-                .mahiro_ips
-                .retain(|_, other_sender| !sender.sender.same_channel(other_sender))
+            peers.insert(public_id, peer_channel.clone());
+
+            mahiro_ipv4s.insert(mahiro_ipv4, peer_channel.clone());
+            mahiro_ipv6s.insert(mahiro_ipv6, peer_channel);
+        }
+
+        Self {
+            inner: Arc::new(PeerStoreInner {
+                peers,
+                mahiro_ipv4s,
+                mahiro_ipv6s,
+                mahiro_link_local_ip: Default::default(),
+            }),
         }
     }
 
-    pub fn get_mahiro_ip_by_public_key(&self, public_key: &[u8]) -> Option<(Ipv4Addr, Ipv6Addr)> {
-        self.0.static_peer_mahiro_ips.get(public_key).copied()
+    pub fn get_http2_transport_receiver_by_public_id(
+        &self,
+        public_id: &str,
+    ) -> Option<Receiver<Http2Message>> {
+        self.inner
+            .peers
+            .get(public_id)
+            .map(|channel| channel.http2_transport_receiver.clone())
     }
 
-    pub fn get_peer_info_by_cookie(&self, cookie: &Bytes) -> Option<PeerInfo> {
-        self.0
-            .peer_infos
-            .get(cookie.as_ref())
-            .map(|info| info.clone())
+    pub fn get_http2_transport_sender_by_mahiro_ip(
+        &self,
+        ip: IpAddr,
+    ) -> Option<&Sender<Http2Message>> {
+        match ip {
+            IpAddr::V4(ip) => self
+                .inner
+                .mahiro_ipv4s
+                .get(&ip)
+                .map(|channel| &channel.http2_transport_sender),
+            IpAddr::V6(ip) => self
+                .inner
+                .mahiro_ipv6s
+                .get(&ip)
+                .map(|channel| &channel.http2_transport_sender),
+        }
     }
 
-    pub fn get_sender_by_mahiro_ip(&self, addr: IpAddr) -> Option<Sender<EncryptMessage>> {
-        self.0.mahiro_ips.get(&addr).map(|sender| sender.clone())
-    }
-
-    pub fn update_peer_addr(&self, cookie: &Bytes, addr: SocketAddr) -> Option<SocketAddr> {
-        self.0
-            .peer_infos
-            .get_mut(cookie.as_ref())
-            .and_then(|mut info| {
-                if info.addr == addr {
-                    None
-                } else {
-                    let old_addr = info.addr;
-                    info.addr = addr;
-
-                    Some(old_addr)
-                }
-            })
+    pub fn update_link_local_ip(&self, link_local_ip: Ipv6Addr, public_id: &str) {
+        if let Some(channel) = self.inner.peers.get(public_id) {
+            self.inner
+                .mahiro_link_local_ip
+                .insert(link_local_ip, channel.clone());
+        }
     }
 }
 
-impl<I: IntoIterator<Item = (PublicKey, (Ipv4Addr, Ipv6Addr))>> From<I> for PeerStore {
-    fn from(value: I) -> Self {
-        Self(Arc::new(PeetStoreInner {
-            static_peer_mahiro_ips: value.into_iter().collect(),
-            peer_infos: Default::default(),
-            mahiro_ips: Default::default(),
-        }))
+#[derive(Debug)]
+struct PeerStoreInner {
+    peers: HashMap<String, Arc<PeerChannel>>,
+    mahiro_ipv4s: HashMap<Ipv4Addr, Arc<PeerChannel>>,
+    mahiro_ipv6s: HashMap<Ipv6Addr, Arc<PeerChannel>>,
+    mahiro_link_local_ip: DashMap<Ipv6Addr, Arc<PeerChannel>>,
+}
+
+struct PeerChannel {
+    http2_transport_sender: Sender<Http2Message>,
+    http2_transport_receiver: Receiver<Http2Message>,
+}
+
+impl Debug for PeerChannel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PeerChannel")
+            .field("http2_transport_sender", &"http2_transport_sender")
+            .field("http2_transport_receiver", &"http2_transport_receiver")
+            .finish()
     }
 }
