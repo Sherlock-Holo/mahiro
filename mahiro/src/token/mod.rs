@@ -1,5 +1,9 @@
 use totp_rs::{Algorithm, TOTP};
 
+pub use self::auth::AuthStore;
+
+mod auth;
+
 #[derive(Debug, Clone)]
 pub struct TokenGenerator {
     totp: TOTP,

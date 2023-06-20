@@ -17,18 +17,16 @@ use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, warn};
 
-pub use self::auth::AuthStore;
 use super::message::Http2Message as Message;
 use super::message::TunMessage;
 use super::peer_store::PeerStore;
 use crate::ip_packet::{get_packet_ip, IpLocation};
 use crate::tls_accept::TlsAcceptor;
+use crate::token::AuthStore;
 use crate::util::{
     Receiver, HMAC_HEADER, INITIAL_CONNECTION_WINDOW_SIZE, INITIAL_WINDOW_SIZE, MAX_FRAME_SIZE,
     PUBLIC_ID_HEADER,
 };
-
-mod auth;
 
 pub struct Http2TransportActor {
     inner: Arc<Http2TransportActorInner>,

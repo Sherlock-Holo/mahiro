@@ -8,10 +8,11 @@ use tokio::task::JoinSet;
 use tracing::{error, info};
 
 use self::config::Config;
-use self::http2::{AuthStore, Http2TransportActor};
+use self::http2::Http2TransportActor;
 use self::nat::NatActor;
 use self::peer_store::PeerStore;
 use self::tun::TunActor;
+use crate::token::AuthStore;
 use crate::util;
 
 mod config;
