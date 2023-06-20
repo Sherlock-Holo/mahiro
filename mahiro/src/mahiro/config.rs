@@ -21,9 +21,16 @@ pub struct Config {
     pub local_ipv6: Ipv6Net,
 
     pub remote_url: String,
+    pub protocol: Protocol,
 
     #[serde(deserialize_with = "parse_duration")]
     pub heartbeat_interval: Duration,
+}
+
+#[derive(Debug, Eq, PartialEq, Copy, Clone, Deserialize)]
+pub enum Protocol {
+    Http2,
+    Websocket,
 }
 
 fn parse_duration<'de, D>(deserializer: D) -> Result<Duration, D::Error>

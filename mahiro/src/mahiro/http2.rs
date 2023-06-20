@@ -12,12 +12,12 @@ use tap::TapFallible;
 use tokio::task::JoinSet;
 use tracing::{error, info, instrument};
 
-use super::message::Http2Message as Message;
+use super::message::TransportMessage as Message;
 use super::message::TunMessage;
 use crate::token::TokenGenerator;
 use crate::util::{
-    Receiver, HMAC_HEADER, INITIAL_CONNECTION_WINDOW_SIZE, INITIAL_WINDOW_SIZE, MAX_FRAME_SIZE,
-    PUBLIC_ID_HEADER, TRANSPORT_COUNT,
+    Receiver, HMAC_HEADER, HTTP2_TRANSPORT_COUNT, INITIAL_CONNECTION_WINDOW_SIZE,
+    INITIAL_WINDOW_SIZE, MAX_FRAME_SIZE, PUBLIC_ID_HEADER,
 };
 
 #[derive(Derivative)]
@@ -78,7 +78,7 @@ impl Http2TransportActor {
             public_id,
             token_generator,
             heartbeat_interval,
-            transport_count: TRANSPORT_COUNT,
+            transport_count: HTTP2_TRANSPORT_COUNT,
         })
     }
 

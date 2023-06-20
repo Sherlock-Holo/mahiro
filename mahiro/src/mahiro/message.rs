@@ -4,6 +4,6 @@ pub enum TunMessage {
     ToTun(Bytes),
 }
 
-pub enum Http2Message {
+pub enum TransportMessage {
     Packet(Bytes),
 }

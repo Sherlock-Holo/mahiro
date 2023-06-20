@@ -14,13 +14,15 @@ use tokio::signal::unix::SignalKind;
 pub const INITIAL_WINDOW_SIZE: u32 = 20 * 1024 * 1024;
 /// 100 MiB
 pub const INITIAL_CONNECTION_WINDOW_SIZE: u32 = 100 * 1024 * 1024;
-/// the h2 lib allow max size
+/// the h2 lib allowed max size
 pub const MAX_FRAME_SIZE: u32 = 16777215;
 /// h2 transport count
-pub const TRANSPORT_COUNT: u8 = 1;
-/// h2 transport public id header
+pub const HTTP2_TRANSPORT_COUNT: u8 = 1;
+/// websocket transport count
+pub const WEBSOCKET_TRANSPORT_COUNT: u8 = 4;
+/// transport public id header
 pub const PUBLIC_ID_HEADER: &str = "x-mahiro-public";
-/// h2 transport hmac header
+/// transport hmac header
 pub const HMAC_HEADER: &str = "x-mahiro-mac";
 
 /// flume 'static RecvStream alias

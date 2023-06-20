@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 use super::message::TunMessage as Message;
 use crate::ip_packet;
 use crate::ip_packet::IpLocation;
-use crate::mahiro::message::Http2Message;
+use crate::mahiro::message::TransportMessage;
 use crate::tun::{Tun, TunReader, TunWriter};
 use crate::util::Receiver;
 
@@ -30,7 +30,7 @@ pub struct TunActor {
     mailbox_sender: Sender<Message>,
     #[derivative(Debug = "ignore")]
     mailbox: Receiver<Message>,
-    encrypt_sender: Sender<Http2Message>,
+    transport_sender: Sender<TransportMessage>,
 
     tun_config: TunConfig,
 
@@ -40,7 +40,7 @@ pub struct TunActor {
 
 impl TunActor {
     pub async fn new(
-        encrypt_sender: Sender<Http2Message>,
+        transport_sender: Sender<TransportMessage>,
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
         tun_config: TunConfig,
@@ -50,7 +50,7 @@ impl TunActor {
         Ok(Self {
             mailbox_sender,
             mailbox,
-            encrypt_sender,
+            transport_sender,
             tun_config,
             tun_writers,
             tun_readers,
@@ -85,7 +85,7 @@ impl TunActor {
 
     async fn read_from_tun(
         mut tun_reader: TunReader,
-        encrypt_sender: Sender<Http2Message>,
+        transport_sender: Sender<TransportMessage>,
     ) -> anyhow::Result<()> {
         let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
@@ -121,9 +121,9 @@ impl TunActor {
                 Some(ip) => ip,
             };
 
-            match encrypt_sender.try_send(Http2Message::Packet(packet)) {
+            match transport_sender.try_send(TransportMessage::Packet(packet)) {
                 Err(TrySendError::Full(_)) => {
-                    warn!("encrypt actor mailbox is full");
+                    warn!("transport actor mailbox is full");
                 }
 
                 Err(err) => {
@@ -131,7 +131,7 @@ impl TunActor {
                 }
 
                 Ok(_) => {
-                    debug!(%src_ip, %dst_ip, "send packet to encrypt done");
+                    debug!(%src_ip, %dst_ip, "send packet to transport done");
                 }
             }
         }
@@ -151,9 +151,9 @@ impl TunActor {
             }
 
             for tun_reader in self.tun_readers.drain(..) {
-                let encrypt_sender = self.encrypt_sender.clone();
+                let transport_sender = self.transport_sender.clone();
 
-                join_set.spawn(Self::read_from_tun(tun_reader, encrypt_sender));
+                join_set.spawn(Self::read_from_tun(tun_reader, transport_sender));
             }
 
             info!("start {count} tun actor queue writer done");
@@ -262,7 +262,7 @@ mod tests {
         };
 
         let (mailbox_sender, mailbox) = flume::bounded(10);
-        let (http2_transport_sender, http2_transport_mailbox) = flume::bounded(10);
+        let (http2_transport_sender, transport_mailbox) = flume::bounded(10);
         let mut tun_actor = TunActor::new(
             http2_transport_sender,
             mailbox_sender.clone(),
@@ -274,14 +274,14 @@ mod tests {
 
         tokio::spawn(async move { tun_actor.run().await });
 
-        let mut encrypt_mailbox = http2_transport_mailbox.into_stream();
+        let mut transport_mailbox = transport_mailbox.into_stream();
 
         let udp_socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
         udp_socket.connect("192.168.1.2:8888").await.unwrap();
         udp_socket.send(b"test").await.unwrap();
 
         loop {
-            let Http2Message::Packet(packet) = encrypt_mailbox.next().await.unwrap();
+            let TransportMessage::Packet(packet) = transport_mailbox.next().await.unwrap();
             let first = packet[0];
             if (first >> 4) != 0b100 {
                 continue;

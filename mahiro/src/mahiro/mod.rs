@@ -1,14 +1,16 @@
 use std::path::Path;
 
+use futures_util::future::Either;
 use rustls::{Certificate, ClientConfig, OwnedTrustAnchor, RootCertStore};
 use tokio::fs;
 use tokio::task::JoinSet;
 use tracing::info;
 use webpki::TrustAnchor;
 
-use self::config::Config;
+use self::config::{Config, Protocol};
 use self::tun::{TunActor, TunConfig};
 use crate::mahiro::http2::Http2TransportActor;
+use crate::mahiro::websocket::WebsocketTransportActor;
 use crate::token::TokenGenerator;
 use crate::util;
 
@@ -16,6 +18,7 @@ mod config;
 mod http2;
 mod message;
 mod tun;
+mod websocket;
 
 pub async fn run(config: &Path) -> anyhow::Result<()> {
     let config_data = fs::read(config).await?;
@@ -36,25 +39,46 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
     let (http2_transport_sender, http2_transport_mailbox) = flume::bounded(64);
     let (tun_sender, tun_mailbox) = flume::bounded(64);
 
-    let mut http2transport_actor = Http2TransportActor::new(
-        tls_client_config,
-        config.remote_url,
-        config.public_id,
-        token_generator,
-        config.heartbeat_interval,
-        http2_transport_mailbox.into_stream(),
-        tun_sender.clone(),
-    )?;
     let mut tun_actor = TunActor::new(
         http2_transport_sender,
-        tun_sender,
+        tun_sender.clone(),
         tun_mailbox.into_stream(),
         tun_config,
     )
     .await?;
 
+    let transport_fut = match config.protocol {
+        Protocol::Http2 => {
+            let mut http2_transport_actor = Http2TransportActor::new(
+                tls_client_config,
+                config.remote_url,
+                config.public_id,
+                token_generator,
+                config.heartbeat_interval,
+                http2_transport_mailbox.into_stream(),
+                tun_sender,
+            )?;
+
+            Either::Left(async move { http2_transport_actor.run().await })
+        }
+
+        Protocol::Websocket => {
+            let mut websocket_transport_actor = WebsocketTransportActor::new(
+                tls_client_config,
+                config.remote_url,
+                config.public_id,
+                token_generator,
+                config.heartbeat_interval,
+                http2_transport_mailbox.into_stream(),
+                tun_sender,
+            )?;
+
+            Either::Right(async move { websocket_transport_actor.run().await })
+        }
+    };
+
     let mut join_set = JoinSet::new();
-    join_set.spawn(async move { http2transport_actor.run().await });
+    join_set.spawn(transport_fut);
     join_set.spawn(async move { tun_actor.run().await });
 
     tokio::select! {
