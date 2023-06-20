@@ -66,7 +66,7 @@ impl WebsocketTransportActor {
     pub async fn run(&mut self) {
         loop {
             if let Err(err) = self.run_circle().await {
-                error!(%err, "http2 actor run circle failed");
+                error!(%err, "websocket actor run circle failed");
             }
         }
     }
@@ -90,7 +90,7 @@ impl WebsocketTransportActor {
 
         join_set.join_next().await.unwrap().unwrap();
 
-        Err(anyhow::anyhow!("http2 actor stopped"))
+        Err(anyhow::anyhow!("websocket actor stopped"))
     }
 
     #[instrument(err)]
@@ -420,22 +420,22 @@ mod tests {
                 .await
         });
 
-        let (http2_transport_sender, http2_transport_mailbox) = flume::unbounded();
+        let (websocket_transport_sender, websocket_transport_mailbox) = flume::unbounded();
         let (tun_sender, tun_mailbox) = flume::unbounded();
-        let mut http2transport_actor = WebsocketTransportActor::new(
+        let mut websocket_transport_actor = WebsocketTransportActor::new(
             tls_client_config,
             "wss://localhost:12010".to_string(),
             PUBLIC_ID.to_string(),
             token_generator,
             HEARTBEAT,
-            http2_transport_mailbox.into_stream(),
+            websocket_transport_mailbox.into_stream(),
             tun_sender,
         )
         .unwrap();
 
-        tokio::spawn(async move { http2transport_actor.run().await });
+        tokio::spawn(async move { websocket_transport_actor.run().await });
 
-        http2_transport_sender
+        websocket_transport_sender
             .send_async(Message::Packet(Bytes::from_static(b"test")))
             .await
             .unwrap();

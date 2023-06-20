@@ -412,7 +412,7 @@ impl WebsocketTransportActor {
 
         let builder = self.builder.take().expect("server has been stopped");
 
-        info!("start http2 transport actor");
+        info!("start websocket transport actor");
 
         builder
             .serve(make_service_fn(move |_conn| {
@@ -426,7 +426,7 @@ impl WebsocketTransportActor {
             }))
             .await?;
 
-        Err(anyhow::anyhow!("http2 transport stopped"))
+        Err(anyhow::anyhow!("websocket transport stopped"))
     }
 }
 
