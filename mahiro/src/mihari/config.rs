@@ -33,6 +33,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Protocol {
     Http2,
     Websocket,
