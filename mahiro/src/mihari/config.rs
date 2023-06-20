@@ -19,6 +19,7 @@ pub struct Config {
     pub local_ipv6: Ipv6Net,
 
     pub listen_addr: SocketAddr,
+    pub protocol: Protocol,
 
     pub key: String,
     pub cert: String,
@@ -29,6 +30,12 @@ pub struct Config {
     pub nic_list: Option<Vec<String>>,
 
     pub bpf_prog: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq, Copy, Clone, Deserialize)]
+pub enum Protocol {
+    Http2,
+    Websocket,
 }
 
 #[derive(Debug, Deserialize)]

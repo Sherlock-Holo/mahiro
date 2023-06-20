@@ -5,6 +5,8 @@ use aya::programs::tc::SchedClassifierLink;
 use aya::programs::xdp::XdpLink;
 use aya::programs::Link;
 use flume::r#async::RecvStream;
+use rustls::{Certificate, PrivateKey};
+use tokio::fs;
 use tokio::signal::unix;
 use tokio::signal::unix::SignalKind;
 
@@ -38,6 +40,20 @@ pub async fn stop_signal() -> io::Result<()> {
     .await;
 
     Ok(())
+}
+
+pub async fn load_certs(path: &str) -> anyhow::Result<Vec<Certificate>> {
+    let certs = fs::read(path).await?;
+    let mut certs = rustls_pemfile::certs(&mut certs.as_slice())?;
+
+    Ok(certs.drain(..).map(Certificate).collect())
+}
+
+pub async fn load_keys(path: &str) -> anyhow::Result<Vec<PrivateKey>> {
+    let keys = fs::read(path).await?;
+    let mut keys = rustls_pemfile::pkcs8_private_keys(&mut keys.as_slice())?;
+
+    Ok(keys.drain(..).map(PrivateKey).collect())
 }
 
 #[derive(Debug)]

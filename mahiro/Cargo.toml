@@ -22,7 +22,7 @@ tap = "1"
 totp-rs = { version = "5", features = ["otpauth"] }
 dashmap = "5"
 
-# http2
+# http2 and websocket
 http = "0.2"
 hyper = { version = "0.14", features = ["client", "server", "runtime", "http1", "http2", "stream"] }
 hyper-rustls = { version = "0.24", features = ["http2", "logging"] }
@@ -31,6 +31,8 @@ tokio-rustls = "0.24"
 rustls-pemfile = "1"
 rustls-native-certs = "0.6"
 webpki = { version = "0.22", features = ["std"] }
+tokio-tungstenite = { version = "0.19", features = ["rustls-tls-native-roots"] }
+hyper-tungstenite = "0.10"
 
 # bpf
 aya = { git = "https://github.com/aya-rs/aya", rev = "58f1ecb", features = ["async_tokio"] }

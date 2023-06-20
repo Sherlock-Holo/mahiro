@@ -2,16 +2,18 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use aya::Bpf;
+use futures_util::future::Either;
 use tap::TapFallible;
 use tokio::fs;
 use tokio::task::JoinSet;
 use tracing::{error, info};
 
-use self::config::Config;
+use self::config::{Config, Protocol};
 use self::http2::Http2TransportActor;
 use self::nat::NatActor;
 use self::peer_store::PeerStore;
 use self::tun::TunActor;
+use crate::mihari::websocket::WebsocketTransportActor;
 use crate::token::AuthStore;
 use crate::util;
 
@@ -21,6 +23,7 @@ mod message;
 mod nat;
 mod peer_store;
 mod tun;
+mod websocket;
 
 pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Result<()> {
     let config_data = fs::read(config).await?;
@@ -55,16 +58,37 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     )
     .await?;
 
-    let mut http2transport_actor = Http2TransportActor::new(
-        tun_sender,
-        auth_store,
-        peer_store,
-        config.listen_addr,
-        &config.cert,
-        &config.key,
-        config.heartbeat_interval,
-    )
-    .await?;
+    let transport_actor_fut = match config.protocol {
+        Protocol::Http2 => {
+            let mut http2_transport_actor = Http2TransportActor::new(
+                tun_sender,
+                auth_store,
+                peer_store,
+                config.listen_addr,
+                &config.cert,
+                &config.key,
+                config.heartbeat_interval,
+            )
+            .await?;
+
+            Either::Left(async move { http2_transport_actor.run().await })
+        }
+
+        Protocol::Websocket => {
+            let mut websocket_transport_actor = WebsocketTransportActor::new(
+                tun_sender,
+                auth_store,
+                peer_store,
+                config.listen_addr,
+                &config.cert,
+                &config.key,
+                config.heartbeat_interval,
+            )
+            .await?;
+
+            Either::Right(async move { websocket_transport_actor.run().await })
+        }
+    };
 
     let mut join_set = JoinSet::new();
     join_set.spawn(async move {
@@ -72,7 +96,7 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
 
         Ok(())
     });
-    join_set.spawn(async move { http2transport_actor.run().await });
+    join_set.spawn(transport_actor_fut);
 
     if bpf_nat || bpf_forward {
         info!(bpf_nat, bpf_forward, "enable bpf nat mode");

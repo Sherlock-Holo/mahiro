@@ -6,7 +6,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use flume::Sender;
 
-use super::message::Http2Message;
+use super::message::TransportMessage;
 use crate::util::Receiver;
 
 #[derive(Clone, Debug)]
@@ -43,20 +43,20 @@ impl PeerStore {
         }
     }
 
-    pub fn get_http2_transport_receiver_by_public_id(
+    pub fn get_transport_receiver_by_public_id(
         &self,
         public_id: &str,
-    ) -> Option<Receiver<Http2Message>> {
+    ) -> Option<Receiver<TransportMessage>> {
         self.inner
             .peers
             .get(public_id)
             .map(|channel| channel.http2_transport_receiver.clone())
     }
 
-    pub fn get_http2_transport_sender_by_mahiro_ip(
+    pub fn get_transport_sender_by_mahiro_ip(
         &self,
         ip: IpAddr,
-    ) -> Option<&Sender<Http2Message>> {
+    ) -> Option<&Sender<TransportMessage>> {
         match ip {
             IpAddr::V4(ip) => self
                 .inner
@@ -89,8 +89,8 @@ struct PeerStoreInner {
 }
 
 struct PeerChannel {
-    http2_transport_sender: Sender<Http2Message>,
-    http2_transport_receiver: Receiver<Http2Message>,
+    http2_transport_sender: Sender<TransportMessage>,
+    http2_transport_receiver: Receiver<TransportMessage>,
 }
 
 impl Debug for PeerChannel {
