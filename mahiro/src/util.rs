@@ -15,7 +15,7 @@ pub const INITIAL_CONNECTION_WINDOW_SIZE: u32 = 100 * 1024 * 1024;
 /// the h2 lib allow max size
 pub const MAX_FRAME_SIZE: u32 = 16777215;
 /// h2 transport count
-pub const TRANSPORT_COUNT: u8 = 8;
+pub const TRANSPORT_COUNT: u8 = 1;
 /// h2 transport public id header
 pub const PUBLIC_ID_HEADER: &str = "x-mahiro-public";
 /// h2 transport hmac header
