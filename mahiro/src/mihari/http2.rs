@@ -17,7 +17,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, warn};
 
-use super::message::Http2Message as Message;
+use super::message::TransportMessage as Message;
 use super::message::TunMessage;
 use super::peer_store::PeerStore;
 use crate::ip_packet::{get_packet_ip, IpLocation};
@@ -105,7 +105,7 @@ impl Http2TransportActorInner {
         peer_store: PeerStore,
     ) {
         let http2_transport_receiver = peer_store
-            .get_http2_transport_receiver_by_public_id(&public_id)
+            .get_transport_receiver_by_public_id(&public_id)
             .expect("handshake done public id has no http2 transport receiver");
         let mut join_set = JoinSet::new();
 
