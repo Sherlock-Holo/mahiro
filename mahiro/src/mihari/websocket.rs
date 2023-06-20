@@ -286,7 +286,7 @@ impl WebsocketTransportActorInner {
     async fn tun_to_transport(
         mut transport_tx: SplitSink<WebSocketStream<Upgraded>, tungstenite::Message>,
         mut websocket_transport_receiver: Receiver<Message>,
-        mut pong_rx: Receiver<PingPong>,
+        mut ping_pong_rx: Receiver<PingPong>,
     ) -> anyhow::Result<()> {
         loop {
             tokio::select! {
@@ -305,15 +305,20 @@ impl WebsocketTransportActorInner {
                     }
                 }
 
-                pong = pong_rx.next() => {
-                    if pong.is_none() {
-                        return Err(anyhow::anyhow!("websocket ping stopped"));
-                    }
+                ping_pong = ping_pong_rx.next() => {
+                    let ping_pong_message = match ping_pong {
+                        None => {
+                            return Err(anyhow::anyhow!("websocket ping stopped"));
+                        }
+
+                        Some(PingPong::Pong) => tungstenite::Message::Pong(vec![]),
+                        Some(PingPong::Ping) => tungstenite::Message::Ping(vec![])
+                    };
 
                     transport_tx
-                            .send(tungstenite::Message::Pong(vec![]))
-                            .await
-                            .tap_err(|err|error!(%err, "transport tx send failed"))?;
+                        .send(ping_pong_message)
+                        .await
+                        .tap_err(|err|error!(%err, "transport tx send failed"))?;
                 }
             }
         }
