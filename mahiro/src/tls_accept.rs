@@ -7,6 +7,7 @@ use futures_util::{ready, StreamExt};
 use hyper::server::accept::Accept;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::server::TlsStream;
+use tracing::error;
 
 pub struct TlsAcceptor {
     tcp_listener: TcpListener,
@@ -33,8 +34,16 @@ impl Accept for TlsAcceptor {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
         loop {
-            if let Poll::Ready(Some(stream)) = self.accepting_stream.poll_next_unpin(cx)? {
-                return Poll::Ready(Some(Ok(stream)));
+            if let Poll::Ready(Some(result)) = self.accepting_stream.poll_next_unpin(cx) {
+                match result {
+                    Err(err) => {
+                        error!(%err, "tls accept failed");
+
+                        continue;
+                    }
+
+                    Ok(stream) => return Poll::Ready(Some(Ok(stream))),
+                }
             }
 
             let (stream, _) = ready!(self.tcp_listener.poll_accept(cx))?;
