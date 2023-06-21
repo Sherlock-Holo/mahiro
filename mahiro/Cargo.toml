@@ -14,6 +14,10 @@ bytes = "1"
 derivative = "2"
 either = "1"
 
+# mptcp
+socket2 = "0.5"
+libc = "0.2"
+
 # error handle
 anyhow = "1"
 tap = "1"
