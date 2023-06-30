@@ -7,7 +7,6 @@ use http::{Method, Request, StatusCode, Uri, Version};
 use hyper::client::HttpConnector;
 use hyper::{body, Body, Client};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
-use rustls::ClientConfig;
 use tap::TapFallible;
 use tokio::task::JoinSet;
 use tracing::{error, info, instrument};
@@ -15,6 +14,7 @@ use tracing::{error, info, instrument};
 use super::message::TransportMessage as Message;
 use super::message::TunMessage;
 use crate::token::TokenGenerator;
+use crate::util;
 use crate::util::{
     Receiver, HMAC_HEADER, HTTP2_TRANSPORT_COUNT, INITIAL_CONNECTION_WINDOW_SIZE,
     INITIAL_WINDOW_SIZE, MAX_FRAME_SIZE, PUBLIC_ID_HEADER,
@@ -36,8 +36,8 @@ pub struct Http2TransportActor {
 }
 
 impl Http2TransportActor {
-    pub fn new(
-        client_config: ClientConfig,
+    pub async fn new(
+        ca: Option<&str>,
         remote_url: String,
         public_id: String,
         token_generator: TokenGenerator,
@@ -54,6 +54,7 @@ impl Http2TransportActor {
             anyhow::anyhow!("no host found")
         })?;
 
+        let client_config = util::create_tls_client_config(None, ca).await?;
         let https_connector = HttpsConnectorBuilder::new()
             .with_tls_config(client_config)
             .https_only()
@@ -208,10 +209,9 @@ mod tests {
     use http::Response;
     use hyper::service::{make_service_fn, service_fn};
     use hyper::Server;
-    use rustls::{Certificate, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerConfig};
+    use rustls::{Certificate, PrivateKey, ServerConfig};
     use tokio::fs;
     use tokio::net::TcpListener;
-    use webpki::TrustAnchor;
 
     use super::*;
     use crate::tls_accept::TlsAcceptor;
@@ -225,7 +225,6 @@ mod tests {
 
         let token_generator = TokenGenerator::new(TEST_SECRET.to_string(), None).unwrap();
         let token_generator_clone = token_generator.clone();
-        let tls_client_config = create_tls_client_config().await.unwrap();
         let tls_server_config = create_tls_server_config().await.unwrap();
 
         let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_server_config));
@@ -287,7 +286,7 @@ mod tests {
         let (http2_transport_sender, http2_transport_mailbox) = flume::unbounded();
         let (tun_sender, tun_mailbox) = flume::unbounded();
         let mut http2transport_actor = Http2TransportActor::new(
-            tls_client_config,
+            Some("../testdata/ca.cert"),
             "https://localhost:12001".to_string(),
             PUBLIC_ID.to_string(),
             token_generator,
@@ -295,6 +294,7 @@ mod tests {
             http2_transport_mailbox.into_stream(),
             tun_sender,
         )
+        .await
         .unwrap();
 
         tokio::spawn(async move { http2transport_actor.run().await });
@@ -308,38 +308,6 @@ mod tests {
         assert_eq!(tun_packet.as_ref(), b"test");
         let body = body_rx.recv_async().await.unwrap();
         assert_eq!(body.as_ref(), b"test");
-    }
-
-    async fn create_tls_client_config() -> anyhow::Result<ClientConfig> {
-        let mut store = RootCertStore::empty();
-        for cert in rustls_native_certs::load_native_certs()? {
-            store.add(&Certificate(cert.0))?;
-        }
-
-        let ca_cert = fs::read("../testdata/ca.cert").await?;
-        let ca_certs = rustls_pemfile::certs(&mut ca_cert.as_slice())?;
-
-        let ca_certs = ca_certs
-            .iter()
-            .map(|cert| {
-                let ta = TrustAnchor::try_from_cert_der(cert)?;
-
-                Ok::<_, anyhow::Error>(OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        store.add_server_trust_anchors(ca_certs.into_iter());
-
-        let client_config = ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(store)
-            .with_no_client_auth();
-
-        Ok(client_config)
     }
 
     async fn create_tls_server_config() -> anyhow::Result<ServerConfig> {

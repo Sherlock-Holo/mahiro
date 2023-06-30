@@ -1,0 +1,6 @@
+organization = "test"
+cn = "holo"
+tls_www_client
+encryption_key
+signing_key
+expiration_days = 3650

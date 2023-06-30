@@ -1,15 +1,14 @@
 use std::path::Path;
 
-use futures_util::future::Either;
-use rustls::{Certificate, ClientConfig, OwnedTrustAnchor, RootCertStore};
 use tokio::fs;
 use tokio::task::JoinSet;
 use tracing::info;
-use webpki::TrustAnchor;
 
 use self::config::{Config, Protocol};
 use self::tun::{TunActor, TunConfig};
+use crate::mahiro::config::QuicType as ConfigQuicType;
 use crate::mahiro::http2::Http2TransportActor;
+use crate::mahiro::quic::{QuicTlsConfig, QuicTransportActor, QuicType};
 use crate::mahiro::websocket::WebsocketTransportActor;
 use crate::token::TokenGenerator;
 use crate::util;
@@ -17,14 +16,13 @@ use crate::util;
 mod config;
 mod http2;
 mod message;
+mod quic;
 mod tun;
 mod websocket;
 
 pub async fn run(config: &Path) -> anyhow::Result<()> {
     let config_data = fs::read(config).await?;
     let config = serde_yaml::from_slice::<Config>(&config_data)?;
-    let tls_client_config = create_tls_client_config(config.ca_cert.as_deref()).await?;
-    let token_generator = TokenGenerator::new(config.token_secret, None)?;
 
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::spawn(conn);
@@ -36,7 +34,7 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
         netlink_handle: handle,
     };
 
-    let (http2_transport_sender, http2_transport_mailbox) = flume::bounded(64);
+    let (http2_transport_sender, transport_mailbox) = flume::bounded(64);
     let (tun_sender, tun_mailbox) = flume::bounded(64);
 
     let mut tun_actor = TunActor::new(
@@ -47,38 +45,83 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
     )
     .await?;
 
-    let transport_fut = match config.protocol {
-        Protocol::Http2 => {
-            let mut http2_transport_actor = Http2TransportActor::new(
-                tls_client_config,
-                config.remote_url,
-                config.public_id,
-                token_generator,
-                config.heartbeat_interval,
-                http2_transport_mailbox.into_stream(),
-                tun_sender,
-            )?;
-
-            Either::Left(async move { http2_transport_actor.run().await })
-        }
-
-        Protocol::Websocket => {
-            let mut websocket_transport_actor = WebsocketTransportActor::new(
-                tls_client_config,
-                config.remote_url,
-                config.public_id,
-                token_generator,
-                config.heartbeat_interval,
-                http2_transport_mailbox.into_stream(),
-                tun_sender,
-            )?;
-
-            Either::Right(async move { websocket_transport_actor.run().await })
-        }
-    };
-
     let mut join_set = JoinSet::new();
-    join_set.spawn(transport_fut);
+
+    match config.protocol {
+        Protocol::Http2 {
+            token_secret,
+            public_id,
+            ca_cert,
+            remote_url,
+        } => {
+            let token_generator = TokenGenerator::new(token_secret, None)?;
+
+            let mut http2_transport_actor = Http2TransportActor::new(
+                ca_cert.as_deref(),
+                remote_url,
+                public_id,
+                token_generator,
+                config.heartbeat_interval,
+                transport_mailbox.into_stream(),
+                tun_sender,
+            )
+            .await?;
+
+            join_set.spawn(async move { http2_transport_actor.run().await });
+        }
+
+        Protocol::Websocket {
+            token_secret,
+            public_id,
+            ca_cert,
+            remote_url,
+        } => {
+            let token_generator = TokenGenerator::new(token_secret, None)?;
+
+            let mut websocket_transport_actor = WebsocketTransportActor::new(
+                ca_cert.as_deref(),
+                remote_url,
+                public_id,
+                token_generator,
+                config.heartbeat_interval,
+                transport_mailbox.into_stream(),
+                tun_sender,
+            )
+            .await?;
+
+            join_set.spawn(async move { websocket_transport_actor.run().await });
+        }
+
+        Protocol::Quic {
+            key,
+            cert,
+            ca_cert,
+            remote_addr,
+            r#type,
+        } => {
+            let quic_type = match r#type {
+                ConfigQuicType::Datagram => QuicType::Datagram,
+                ConfigQuicType::Stream => QuicType::Stream,
+            };
+
+            let mut quic_transport_actor = QuicTransportActor::new(
+                QuicTlsConfig {
+                    ca: ca_cert.as_deref(),
+                    key: &key,
+                    cert: &cert,
+                },
+                &remote_addr,
+                config.heartbeat_interval,
+                transport_mailbox.into_stream(),
+                tun_sender,
+                quic_type,
+            )
+            .await?;
+
+            join_set.spawn(async move { quic_transport_actor.run().await });
+        }
+    }
+
     join_set.spawn(async move { tun_actor.run().await });
 
     tokio::select! {
@@ -96,38 +139,4 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
             Ok(())
         }
     }
-}
-
-async fn create_tls_client_config(ca: Option<&str>) -> anyhow::Result<ClientConfig> {
-    let mut store = RootCertStore::empty();
-    for cert in rustls_native_certs::load_native_certs()? {
-        store.add(&Certificate(cert.0))?;
-    }
-
-    if let Some(ca) = ca {
-        let ca_cert = fs::read(ca).await?;
-        let ca_certs = rustls_pemfile::certs(&mut ca_cert.as_slice())?;
-
-        let ca_certs = ca_certs
-            .iter()
-            .map(|cert| {
-                let ta = TrustAnchor::try_from_cert_der(cert)?;
-
-                Ok::<_, anyhow::Error>(OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        store.add_server_trust_anchors(ca_certs.into_iter());
-    }
-
-    let client_config = ClientConfig::builder()
-        .with_safe_defaults()
-        .with_root_certificates(store)
-        .with_no_client_auth();
-
-    Ok(client_config)
 }

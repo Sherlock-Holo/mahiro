@@ -20,6 +20,7 @@ use tracing::{error, info, instrument, warn};
 use super::message::TransportMessage as Message;
 use super::message::TunMessage;
 use crate::token::TokenGenerator;
+use crate::util;
 use crate::util::{Receiver, HMAC_HEADER, PUBLIC_ID_HEADER, WEBSOCKET_TRANSPORT_COUNT};
 
 #[derive(Derivative)]
@@ -38,8 +39,8 @@ pub struct WebsocketTransportActor {
 }
 
 impl WebsocketTransportActor {
-    pub fn new(
-        client_config: ClientConfig,
+    pub async fn new(
+        ca: Option<&str>,
         remote_url: String,
         public_id: String,
         token_generator: TokenGenerator,
@@ -50,6 +51,8 @@ impl WebsocketTransportActor {
         let remote_url: Uri = remote_url
             .parse()
             .tap_err(|err| error!(%err, %remote_url, "parse remote url failed"))?;
+
+        let client_config = util::create_tls_client_config(None, ca).await?;
 
         Ok(Self {
             mailbox,
@@ -337,11 +340,10 @@ mod tests {
     use hyper::service::{make_service_fn, service_fn};
     use hyper::upgrade::Upgraded;
     use hyper::{Body, Server};
-    use rustls::{Certificate, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerConfig};
+    use rustls::{Certificate, PrivateKey, ServerConfig};
     use test_log::test;
     use tokio::fs;
     use tokio::net::TcpListener;
-    use webpki::TrustAnchor;
 
     use super::*;
     use crate::tls_accept::TlsAcceptor;
@@ -355,7 +357,6 @@ mod tests {
 
         let token_generator = TokenGenerator::new(TEST_SECRET.to_string(), None).unwrap();
         let token_generator_clone = token_generator.clone();
-        let tls_client_config = create_tls_client_config().await.unwrap();
         let tls_server_config = create_tls_server_config().await.unwrap();
 
         let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_server_config));
@@ -423,7 +424,7 @@ mod tests {
         let (websocket_transport_sender, websocket_transport_mailbox) = flume::unbounded();
         let (tun_sender, tun_mailbox) = flume::unbounded();
         let mut websocket_transport_actor = WebsocketTransportActor::new(
-            tls_client_config,
+            Some("../testdata/ca.cert"),
             "wss://localhost:12010".to_string(),
             PUBLIC_ID.to_string(),
             token_generator,
@@ -431,6 +432,7 @@ mod tests {
             websocket_transport_mailbox.into_stream(),
             tun_sender,
         )
+        .await
         .unwrap();
 
         tokio::spawn(async move { websocket_transport_actor.run().await });
@@ -444,38 +446,6 @@ mod tests {
         assert_eq!(tun_packet.as_ref(), b"test");
         let body = body_rx.recv_async().await.unwrap();
         assert_eq!(body, b"test");
-    }
-
-    async fn create_tls_client_config() -> anyhow::Result<ClientConfig> {
-        let mut store = RootCertStore::empty();
-        for cert in rustls_native_certs::load_native_certs()? {
-            store.add(&Certificate(cert.0))?;
-        }
-
-        let ca_cert = fs::read("../testdata/ca.cert").await?;
-        let ca_certs = rustls_pemfile::certs(&mut ca_cert.as_slice())?;
-
-        let ca_certs = ca_certs
-            .iter()
-            .map(|cert| {
-                let ta = TrustAnchor::try_from_cert_der(cert)?;
-
-                Ok::<_, anyhow::Error>(OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        store.add_server_trust_anchors(ca_certs.into_iter());
-
-        let client_config = ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(store)
-            .with_no_client_auth();
-
-        Ok(client_config)
     }
 
     async fn create_tls_server_config() -> anyhow::Result<ServerConfig> {
