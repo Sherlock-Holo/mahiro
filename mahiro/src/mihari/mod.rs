@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use aya::Bpf;
-use futures_util::future::Either;
+use futures_util::FutureExt;
 use tap::TapFallible;
 use tokio::fs;
 use tokio::task::JoinSet;
@@ -13,6 +13,8 @@ use self::http2::Http2TransportActor;
 use self::nat::NatActor;
 use self::peer_store::PeerStore;
 use self::tun::TunActor;
+use crate::mihari::config::PeerAuth;
+use crate::mihari::quic::{CommonNameAuthStore, QuicTlsConfig, QuicTransportActor};
 use crate::mihari::websocket::WebsocketTransportActor;
 use crate::token::AuthStore;
 use crate::util;
@@ -22,6 +24,7 @@ mod http2;
 mod message;
 mod nat;
 mod peer_store;
+mod quic;
 mod tun;
 mod websocket;
 
@@ -34,18 +37,30 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
 
     let (tun_sender, tun_mailbox) = flume::bounded(64);
 
-    let peer_store = PeerStore::new(
-        config
-            .peers
-            .iter()
-            .map(|peer| (peer.public_id.clone(), peer.peer_ipv4, peer.peer_ipv6)),
-    );
-    let auth_store = AuthStore::new(
-        config
-            .peers
-            .into_iter()
-            .map(|peer| (peer.public_id, peer.token_secret)),
-    )?;
+    let peer_store = PeerStore::new(config.peers.iter().map(|peer| match &peer.auth {
+        PeerAuth::Http { public_id, .. } | PeerAuth::Websocket { public_id, .. } => {
+            (public_id.clone(), peer.peer_ipv4, peer.peer_ipv6)
+        }
+        PeerAuth::Quic { common_name } => (common_name.clone(), peer.peer_ipv4, peer.peer_ipv6),
+    }));
+
+    let auth_store = AuthStore::new(config.peers.iter().filter_map(|peer| match &peer.auth {
+        PeerAuth::Http {
+            public_id,
+            token_secret,
+        }
+        | PeerAuth::Websocket {
+            public_id,
+            token_secret,
+        } => Some((public_id.clone(), token_secret.clone())),
+        PeerAuth::Quic { .. } => None,
+    }))?;
+
+    let common_name_auth_store =
+        CommonNameAuthStore::new(config.peers.into_iter().filter_map(|peer| match peer.auth {
+            PeerAuth::Http { .. } | PeerAuth::Websocket { .. } => None,
+            PeerAuth::Quic { common_name } => Some(common_name),
+        }));
 
     let mut tun_actor = TunActor::new(
         tun_sender.clone(),
@@ -71,7 +86,7 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
             )
             .await?;
 
-            Either::Left(async move { http2_transport_actor.run().await })
+            async move { http2_transport_actor.run().await }.boxed()
         }
 
         Protocol::Websocket => {
@@ -86,7 +101,29 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
             )
             .await?;
 
-            Either::Right(async move { websocket_transport_actor.run().await })
+            async move { websocket_transport_actor.run().await }.boxed()
+        }
+
+        Protocol::Quic => {
+            let ca_cert = config
+                .ca_cert
+                .ok_or_else(|| anyhow::anyhow!("quic mode need ca_cert"))?;
+
+            let mut quic_transport_actor = QuicTransportActor::new(
+                tun_sender,
+                common_name_auth_store,
+                peer_store,
+                config.listen_addr,
+                QuicTlsConfig {
+                    ca: &ca_cert,
+                    key: &config.key,
+                    cert: &config.cert,
+                },
+                config.heartbeat_interval,
+            )
+            .await?;
+
+            async move { quic_transport_actor.run().await }.boxed()
         }
     };
 

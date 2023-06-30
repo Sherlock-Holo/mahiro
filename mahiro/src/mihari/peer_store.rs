@@ -20,14 +20,14 @@ impl PeerStore {
         let mut mahiro_ipv4s = HashMap::new();
         let mut mahiro_ipv6s = HashMap::new();
 
-        for (public_id, mahiro_ipv4, mahiro_ipv6) in peers_iter.into_iter() {
+        for (identity, mahiro_ipv4, mahiro_ipv6) in peers_iter.into_iter() {
             let (http2_transport_sender, http2_transport_receiver) = flume::bounded(64);
             let peer_channel = Arc::new(PeerChannel {
                 http2_transport_sender,
                 http2_transport_receiver: http2_transport_receiver.into_stream(),
             });
 
-            peers.insert(public_id, peer_channel.clone());
+            peers.insert(identity, peer_channel.clone());
 
             mahiro_ipv4s.insert(mahiro_ipv4, peer_channel.clone());
             mahiro_ipv6s.insert(mahiro_ipv6, peer_channel);
@@ -43,13 +43,13 @@ impl PeerStore {
         }
     }
 
-    pub fn get_transport_receiver_by_public_id(
+    pub fn get_transport_receiver_by_identity(
         &self,
-        public_id: &str,
+        identity: &str,
     ) -> Option<Receiver<TransportMessage>> {
         self.inner
             .peers
-            .get(public_id)
+            .get(identity)
             .map(|channel| channel.http2_transport_receiver.clone())
     }
 
@@ -71,8 +71,8 @@ impl PeerStore {
         }
     }
 
-    pub fn update_link_local_ip(&self, link_local_ip: Ipv6Addr, public_id: &str) {
-        if let Some(channel) = self.inner.peers.get(public_id) {
+    pub fn update_link_local_ip(&self, link_local_ip: Ipv6Addr, identity: &str) {
+        if let Some(channel) = self.inner.peers.get(identity) {
             self.inner
                 .mahiro_link_local_ip
                 .insert(link_local_ip, channel.clone());

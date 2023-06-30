@@ -24,6 +24,7 @@ pub struct Config {
 
     pub key: String,
     pub cert: String,
+    pub ca_cert: Option<String>,
 
     #[serde(deserialize_with = "parse_duration")]
     pub heartbeat_interval: Duration,
@@ -38,12 +39,30 @@ pub struct Config {
 pub enum Protocol {
     Http2,
     Websocket,
+    Quic,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerAuth {
+    Http {
+        public_id: String,
+        token_secret: String,
+    },
+
+    Websocket {
+        public_id: String,
+        token_secret: String,
+    },
+
+    Quic {
+        common_name: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Peer {
-    pub public_id: String,
-    pub token_secret: String,
+    pub auth: PeerAuth,
 
     pub peer_ipv4: Ipv4Addr,
     pub peer_ipv6: Ipv6Addr,

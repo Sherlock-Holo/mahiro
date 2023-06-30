@@ -123,7 +123,7 @@ impl WebsocketTransportActorInner {
         let (transport_tx, transport_rx) = websocket.split();
 
         let transport_receiver = peer_store
-            .get_transport_receiver_by_public_id(&public_id)
+            .get_transport_receiver_by_identity(&public_id)
             .expect("handshake done public id has no websocket transport receiver");
 
         let mut join_set = JoinSet::new();

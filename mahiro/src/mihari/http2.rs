@@ -10,9 +10,7 @@ use http::{Method, Request, Response, StatusCode, Version};
 use hyper::server::Builder;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Server};
-use rustls::{Certificate, PrivateKey, ServerConfig};
 use tap::{TapFallible, TapOptional};
-use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, warn};
@@ -23,6 +21,7 @@ use super::peer_store::PeerStore;
 use crate::ip_packet::{get_packet_ip, IpLocation};
 use crate::tls_accept::TlsAcceptor;
 use crate::token::AuthStore;
+use crate::util;
 use crate::util::{
     Receiver, HMAC_HEADER, INITIAL_CONNECTION_WINDOW_SIZE, INITIAL_WINDOW_SIZE, MAX_FRAME_SIZE,
     PUBLIC_ID_HEADER,
@@ -105,7 +104,7 @@ impl Http2TransportActorInner {
         peer_store: PeerStore,
     ) {
         let http2_transport_receiver = peer_store
-            .get_transport_receiver_by_public_id(&public_id)
+            .get_transport_receiver_by_identity(&public_id)
             .expect("handshake done public id has no http2 transport receiver");
         let mut join_set = JoinSet::new();
 
@@ -244,13 +243,7 @@ impl Http2TransportActor {
         key: &str,
         heartbeat_interval: Duration,
     ) -> anyhow::Result<Self> {
-        let certs = load_certs(cert).await?;
-        let mut keys = load_keys(key).await?;
-
-        let server_config = ServerConfig::builder()
-            .with_safe_defaults()
-            .with_no_client_auth()
-            .with_single_cert(certs, keys.remove(0))?;
+        let server_config = util::create_tls_server_config(key, cert, None).await?;
 
         info!("create server config done");
 
@@ -298,18 +291,4 @@ impl Http2TransportActor {
 
         Err(anyhow::anyhow!("http2 transport stopped"))
     }
-}
-
-async fn load_certs(path: &str) -> anyhow::Result<Vec<Certificate>> {
-    let certs = fs::read(path).await?;
-    let mut certs = rustls_pemfile::certs(&mut certs.as_slice())?;
-
-    Ok(certs.drain(..).map(Certificate).collect())
-}
-
-async fn load_keys(path: &str) -> anyhow::Result<Vec<PrivateKey>> {
-    let keys = fs::read(path).await?;
-    let mut keys = rustls_pemfile::pkcs8_private_keys(&mut keys.as_slice())?;
-
-    Ok(keys.drain(..).map(PrivateKey).collect())
 }
