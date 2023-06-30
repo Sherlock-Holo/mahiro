@@ -47,6 +47,7 @@ pub enum Protocol {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum QuicType {
     Datagram,
     Stream,
