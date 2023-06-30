@@ -2,10 +2,9 @@ use std::net::{Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::BytesMut;
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use http::Uri;
 use quinn::congestion::BbrConfig;
 use quinn::{
@@ -13,12 +12,13 @@ use quinn::{
     TransportConfig,
 };
 use tap::TapFallible;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::task::JoinSet;
+use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::{error, info, instrument, warn};
 
 use super::message::TransportMessage as Message;
 use super::message::TunMessage;
+use crate::quic_stream_codec::{QuicStreamDecoder, QuicStreamEncoder};
 use crate::util::{self, Receiver};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -168,6 +168,8 @@ impl QuicTransportActor {
 
         join_set.join_next().await.unwrap().unwrap();
 
+        join_set.shutdown().await;
+
         Err(anyhow::anyhow!("quic actor stopped"))
     }
 
@@ -188,6 +190,8 @@ impl QuicTransportActor {
         }
 
         join_set.join_next().await.unwrap().unwrap();
+
+        join_set.shutdown().await;
 
         Err(anyhow::anyhow!("quic actor stopped"))
     }
@@ -289,65 +293,39 @@ impl QuicTransportActor {
 
     async fn run_stream_transport(
         transport_tx: SendStream,
-        mut transport_rx: RecvStream,
+        transport_rx: RecvStream,
         tun_sender: Sender<TunMessage>,
-        mut mailbox: Receiver<Message>,
+        mailbox: Receiver<Message>,
     ) {
-        let mut transport_tx = BufWriter::new(transport_tx);
-
         let mut join_set = JoinSet::new();
         join_set.spawn(async move {
-            let mut buf = BytesMut::with_capacity(1500 * 4);
+            let mut transport_rx = FramedRead::new(transport_rx, QuicStreamDecoder::default());
 
-            loop {
-                let mut len = transport_rx
-                    .read_u16()
-                    .await
-                    .tap_err(|err| error!(%err, "quic read packet len failed"))?;
-
-                buf.reserve(len as _);
-
-                while len > 0 {
-                    let n = transport_rx
-                        .read_buf(&mut buf)
-                        .await
-                        .tap_err(|err| error!(%err, "quic read failed"))?;
-                    if n == 0 {
-                        return Err(anyhow::anyhow!("quic connection closed"));
-                    }
-
-                    len -= n as u16;
-                }
-
-                let data = buf.split().freeze();
-
+            while let Some(packet) = transport_rx
+                .try_next()
+                .await
+                .tap_err(|err| error!(%err, "quic read packet failed"))?
+            {
                 if let Err(TrySendError::Disconnected(_)) =
-                    tun_sender.try_send(TunMessage::ToTun(data))
+                    tun_sender.try_send(TunMessage::ToTun(packet))
                 {
                     error!("tun sender disconnected");
 
                     return Err(anyhow::anyhow!("tun sender disconnected"));
                 }
             }
+
+            Err(anyhow::anyhow!("quic connection closed"))
         });
 
         join_set.spawn(async move {
-            while let Some(Message::Packet(packet)) = mailbox.next().await {
-                transport_tx
-                    .write_u16(packet.len() as _)
-                    .await
-                    .tap_err(|err| error!(%err, "quic send packet len failed"))?;
+            let transport_tx = FramedWrite::new(transport_tx, QuicStreamEncoder::default());
 
-                transport_tx
-                    .write_all(&packet)
-                    .await
-                    .tap_err(|err| error!(%err, "quic send failed"))?;
-
-                transport_tx
-                    .flush()
-                    .await
-                    .tap_err(|err| error!(%err, "quic flush failed"))?;
-            }
+            mailbox
+                .map(|Message::Packet(packet)| Ok(packet))
+                .forward(transport_tx)
+                .await
+                .tap_err(|err| error!(%err, "quic send packet failed"))?;
 
             Ok(())
         });
@@ -371,6 +349,7 @@ mod tests {
     use quinn::ServerConfig;
     use rustls::Certificate;
     use test_log::test;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::time as tokio_time;
 
     use super::*;
@@ -483,9 +462,6 @@ mod tests {
             rx.read_exact(&mut buf).await.unwrap();
 
             data_tx.send_async(Bytes::from(buf)).await.unwrap();
-
-            // wait send datagram done
-            tokio_time::sleep(Duration::from_millis(100)).await;
 
             server_endpoint.wait_idle().await;
         });

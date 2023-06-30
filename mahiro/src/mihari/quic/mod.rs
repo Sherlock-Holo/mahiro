@@ -2,10 +2,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::BytesMut;
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use quinn::congestion::BbrConfig;
 use quinn::{
     Connecting, Connection, ConnectionError, Endpoint, IdleTimeout, RecvStream, SendStream,
@@ -13,15 +12,16 @@ use quinn::{
 };
 use rustls::Certificate;
 use tap::TapFallible;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::task::JoinSet;
-use tracing::{error, info, warn};
+use tokio_util::codec::{FramedRead, FramedWrite};
+use tracing::{debug, error, info, warn};
 
 pub use self::common_name_auth::CommonNameAuthStore;
 use super::message::TransportMessage as Message;
 use super::message::TunMessage;
 use super::peer_store::PeerStore;
 use crate::ip_packet::{get_packet_ip, IpLocation};
+use crate::quic_stream_codec::{QuicStreamDecoder, QuicStreamEncoder};
 use crate::util;
 use crate::util::Receiver;
 
@@ -46,8 +46,6 @@ pub struct QuicTransportActor {
     endpoint: Endpoint,
     auth_store: Arc<CommonNameAuthStore>,
     peer_store: PeerStore<QuicType>,
-
-    heartbeat_interval: Duration,
 }
 
 impl QuicTransportActor {
@@ -80,7 +78,6 @@ impl QuicTransportActor {
             endpoint,
             auth_store: Arc::new(auth_store),
             peer_store,
-            heartbeat_interval,
         })
     }
 
@@ -236,6 +233,8 @@ impl QuicTransportWorker {
                 .await
                 .tap_err(|err| error!(%err, "accept stream failed"))?;
 
+            info!("accept stream done");
+
             let tun_sender = self.tun_sender.clone();
             let peer_store = self.peer_store.clone();
             let common_name = self.common_name.clone();
@@ -252,6 +251,12 @@ impl QuicTransportWorker {
                 ));
 
                 join_set.spawn(Self::tun_to_stream_transport(send, transport_receiver));
+
+                if let Err(err) = join_set.join_next().await.unwrap().unwrap() {
+                    error!(%err, "run quic stream transport failed");
+                } else {
+                    error!("run quic stream transport stopped");
+                }
             });
         }
     }
@@ -262,30 +267,13 @@ impl QuicTransportWorker {
         peer_store: PeerStore<QuicType>,
         common_name: String,
     ) -> anyhow::Result<()> {
-        let mut buf = BytesMut::with_capacity(1500 * 4);
-        let mut transport_rx = BufReader::new(transport_rx);
+        let mut transport_rx = FramedRead::new(transport_rx, QuicStreamDecoder::default());
 
-        loop {
-            let mut len = transport_rx
-                .read_u16()
-                .await
-                .tap_err(|err| error!(%err, "quic read packet len failed"))?;
-            buf.reserve(len as _);
-
-            while len > 0 {
-                let n = transport_rx
-                    .read_buf(&mut buf)
-                    .await
-                    .tap_err(|err| error!(%err, "quic read failed"))?;
-                if n == 0 {
-                    return Err(anyhow::anyhow!("quic connection closed"));
-                }
-
-                len -= n as u16;
-            }
-
-            let packet = buf.split().freeze();
-
+        while let Some(packet) = transport_rx
+            .try_next()
+            .await
+            .tap_err(|err| error!(%err, "quic read packet failed"))?
+        {
             match get_packet_ip(&packet, IpLocation::Src) {
                 None => {
                     warn!("drop not ip packet");
@@ -294,6 +282,8 @@ impl QuicTransportWorker {
                 }
 
                 Some(src_ip) => {
+                    debug!(%src_ip, "get src ip done");
+
                     if let IpAddr::V6(src_ip) = src_ip {
                         if src_ip.is_unicast_link_local() {
                             peer_store.update_link_local_ip(src_ip, &common_name);
@@ -318,6 +308,8 @@ impl QuicTransportWorker {
                 Ok(_) => {}
             }
         }
+
+        Err(anyhow::anyhow!("quic connection closed"))
     }
 
     async fn datagram_transport_to_tun(
@@ -385,25 +377,15 @@ impl QuicTransportWorker {
 
     async fn tun_to_stream_transport(
         transport_tx: SendStream,
-        mut quic_transport_receiver: Receiver<Message>,
+        quic_transport_receiver: Receiver<Message>,
     ) -> anyhow::Result<()> {
-        let mut transport_tx = BufWriter::new(transport_tx);
+        let transport_tx = FramedWrite::new(transport_tx, QuicStreamEncoder::default());
 
-        while let Some(Message::Packet(packet)) = quic_transport_receiver.next().await {
-            transport_tx
-                .write_u16(packet.len() as _)
-                .await
-                .tap_err(|err| error!(%err, "quic write packet len failed"))?;
-            transport_tx
-                .write_all(&packet)
-                .await
-                .tap_err(|err| error!(%err, "quic write packet failed"))?;
-
-            transport_tx
-                .flush()
-                .await
-                .tap_err(|err| error!(%err, "quic flush failed"))?;
-        }
+        quic_transport_receiver
+            .map(|Message::Packet(packet)| Ok(packet))
+            .forward(transport_tx)
+            .await
+            .tap_err(|err| error!(%err, "quic send packet failed"))?;
 
         Err(anyhow::anyhow!("quic_transport_receiver stopped"))
     }
