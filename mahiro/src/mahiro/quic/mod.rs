@@ -9,7 +9,8 @@ use futures_util::StreamExt;
 use http::Uri;
 use quinn::congestion::BbrConfig;
 use quinn::{
-    ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, TransportConfig,
+    ClientConfig, Connection, ConnectionError, Endpoint, IdleTimeout, RecvStream, SendStream,
+    TransportConfig,
 };
 use tap::TapFallible;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
@@ -78,8 +79,11 @@ impl QuicTransportActor {
         let mut client_config = ClientConfig::new(Arc::new(client_config));
         let mut transport_config = TransportConfig::default();
 
-        // enable bbr
-        transport_config.congestion_controller_factory(Arc::new(BbrConfig::default()));
+        // enable bbr and set keepalive
+        transport_config
+            .congestion_controller_factory(Arc::new(BbrConfig::default()))
+            .max_idle_timeout(Some(IdleTimeout::try_from(heartbeat_interval * 2).unwrap()))
+            .keep_alive_interval(Some(heartbeat_interval));
         client_config.transport_config(Arc::new(transport_config));
 
         let mut endpoint = Endpoint::client(SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0))
