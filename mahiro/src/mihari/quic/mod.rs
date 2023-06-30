@@ -6,8 +6,10 @@ use bytes::BytesMut;
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
 use futures_util::StreamExt;
+use quinn::congestion::BbrConfig;
 use quinn::{
-    Connecting, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig, VarInt,
+    Connecting, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig,
+    TransportConfig, VarInt,
 };
 use rustls::Certificate;
 use tap::TapFallible;
@@ -61,10 +63,14 @@ impl QuicTransportActor {
 
         info!(?tls_server_config, "create server config done");
 
-        let endpoint = Endpoint::server(
-            ServerConfig::with_crypto(Arc::new(tls_server_config)),
-            listen_addr,
-        )?;
+        let mut server_config = ServerConfig::with_crypto(Arc::new(tls_server_config));
+        let mut transport_config = TransportConfig::default();
+
+        // enable bbr
+        transport_config.congestion_controller_factory(Arc::new(BbrConfig::default()));
+        server_config.transport_config(Arc::new(transport_config));
+
+        let endpoint = Endpoint::server(server_config, listen_addr)?;
 
         Ok(Self {
             tun_sender,

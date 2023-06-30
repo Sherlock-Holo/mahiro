@@ -7,7 +7,10 @@ use derivative::Derivative;
 use flume::{Sender, TrySendError};
 use futures_util::StreamExt;
 use http::Uri;
-use quinn::{ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream};
+use quinn::congestion::BbrConfig;
+use quinn::{
+    ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream, TransportConfig,
+};
 use tap::TapFallible;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::task::JoinSet;
@@ -72,7 +75,13 @@ impl QuicTransportActor {
         let domain_and_port = remote_addr.authority().unwrap().as_str();
 
         let client_config = util::create_tls_client_config(Some((key, cert)), ca).await?;
-        let client_config = ClientConfig::new(Arc::new(client_config));
+        let mut client_config = ClientConfig::new(Arc::new(client_config));
+        let mut transport_config = TransportConfig::default();
+
+        // enable bbr
+        transport_config.congestion_controller_factory(Arc::new(BbrConfig::default()));
+        client_config.transport_config(Arc::new(transport_config));
+
         let mut endpoint = Endpoint::client(SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0))
             .tap_err(|err| error!(%err, "bind endpoint failed"))?;
         endpoint.set_default_client_config(client_config);
