@@ -23,6 +23,7 @@ mod mahiro;
 mod mihari;
 mod mptcp;
 mod public_key;
+mod quic_stream_codec;
 mod tls_accept;
 mod token;
 mod tun;

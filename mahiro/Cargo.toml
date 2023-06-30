@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "fs", "signal"] }
 tokio-stream = { version = "0.1", features = ["time", "io-util"] }
+tokio-util = { version = "0.7", features = ["codec"] }
 futures-util = "0.3"
 flume = { version = "0.10", git = "https://github.com/zesterer/flume.git", rev = "bfa2a9b" }
 bytes = "1"
