@@ -10,21 +10,22 @@ use super::message::TransportMessage;
 use crate::util::Receiver;
 
 #[derive(Clone, Debug)]
-pub struct PeerStore {
-    inner: Arc<PeerStoreInner>,
+pub struct PeerStore<T: Send + Debug + Clone> {
+    inner: Arc<PeerStoreInner<T>>,
 }
 
-impl PeerStore {
-    pub fn new<I: IntoIterator<Item = (String, Ipv4Addr, Ipv6Addr)>>(peers_iter: I) -> Self {
+impl<T: Send + Debug + Clone> PeerStore<T> {
+    pub fn new<I: IntoIterator<Item = (String, Ipv4Addr, Ipv6Addr, T)>>(peers_iter: I) -> Self {
         let mut peers = HashMap::new();
         let mut mahiro_ipv4s = HashMap::new();
         let mut mahiro_ipv6s = HashMap::new();
 
-        for (identity, mahiro_ipv4, mahiro_ipv6) in peers_iter.into_iter() {
+        for (identity, mahiro_ipv4, mahiro_ipv6, info) in peers_iter.into_iter() {
             let (http2_transport_sender, http2_transport_receiver) = flume::bounded(64);
             let peer_channel = Arc::new(PeerChannel {
                 http2_transport_sender,
                 http2_transport_receiver: http2_transport_receiver.into_stream(),
+                info,
             });
 
             peers.insert(identity, peer_channel.clone());
@@ -51,6 +52,13 @@ impl PeerStore {
             .peers
             .get(identity)
             .map(|channel| channel.http2_transport_receiver.clone())
+    }
+
+    pub fn get_info_by_identity(&self, identity: &str) -> Option<T> {
+        self.inner
+            .peers
+            .get(identity)
+            .map(|channel| channel.info.clone())
     }
 
     pub fn get_transport_sender_by_mahiro_ip(
@@ -81,23 +89,25 @@ impl PeerStore {
 }
 
 #[derive(Debug)]
-struct PeerStoreInner {
-    peers: HashMap<String, Arc<PeerChannel>>,
-    mahiro_ipv4s: HashMap<Ipv4Addr, Arc<PeerChannel>>,
-    mahiro_ipv6s: HashMap<Ipv6Addr, Arc<PeerChannel>>,
-    mahiro_link_local_ip: DashMap<Ipv6Addr, Arc<PeerChannel>>,
+struct PeerStoreInner<T: Send + Debug + Clone> {
+    peers: HashMap<String, Arc<PeerChannel<T>>>,
+    mahiro_ipv4s: HashMap<Ipv4Addr, Arc<PeerChannel<T>>>,
+    mahiro_ipv6s: HashMap<Ipv6Addr, Arc<PeerChannel<T>>>,
+    mahiro_link_local_ip: DashMap<Ipv6Addr, Arc<PeerChannel<T>>>,
 }
 
-struct PeerChannel {
+struct PeerChannel<T: Send + Debug + Clone> {
     http2_transport_sender: Sender<TransportMessage>,
     http2_transport_receiver: Receiver<TransportMessage>,
+    info: T,
 }
 
-impl Debug for PeerChannel {
+impl<T: Send + Debug + Clone> Debug for PeerChannel<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PeerChannel")
             .field("http2_transport_sender", &"http2_transport_sender")
             .field("http2_transport_receiver", &"http2_transport_receiver")
+            .field("info", &self.info)
             .finish()
     }
 }

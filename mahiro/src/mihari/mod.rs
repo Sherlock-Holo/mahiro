@@ -8,14 +8,14 @@ use tokio::fs;
 use tokio::task::JoinSet;
 use tracing::{error, info};
 
+use self::config::PeerAuth;
 use self::config::{Config, Protocol};
 use self::http2::Http2TransportActor;
 use self::nat::NatActor;
 use self::peer_store::PeerStore;
+use self::quic::{CommonNameAuthStore, QuicTlsConfig, QuicTransportActor, QuicType};
 use self::tun::TunActor;
-use crate::mihari::config::PeerAuth;
-use crate::mihari::quic::{CommonNameAuthStore, QuicTlsConfig, QuicTransportActor};
-use crate::mihari::websocket::WebsocketTransportActor;
+use self::websocket::WebsocketTransportActor;
 use crate::token::AuthStore;
 use crate::util;
 
@@ -38,10 +38,28 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     let (tun_sender, tun_mailbox) = flume::bounded(64);
 
     let peer_store = PeerStore::new(config.peers.iter().map(|peer| match &peer.auth {
-        PeerAuth::Http { public_id, .. } | PeerAuth::Websocket { public_id, .. } => {
-            (public_id.clone(), peer.peer_ipv4, peer.peer_ipv6)
+        PeerAuth::Http { public_id, .. } | PeerAuth::Websocket { public_id, .. } => (
+            public_id.clone(),
+            peer.peer_ipv4,
+            peer.peer_ipv6,
+            QuicType::Stream,
+        ),
+        PeerAuth::Quic {
+            common_name,
+            quic_type,
+        } => {
+            let quic_type = match quic_type {
+                config::QuicType::Datagram => QuicType::Datagram,
+                config::QuicType::Stream => QuicType::Stream,
+            };
+
+            (
+                common_name.clone(),
+                peer.peer_ipv4,
+                peer.peer_ipv6,
+                quic_type,
+            )
         }
-        PeerAuth::Quic { common_name } => (common_name.clone(), peer.peer_ipv4, peer.peer_ipv6),
     }));
 
     let auth_store = AuthStore::new(config.peers.iter().filter_map(|peer| match &peer.auth {
@@ -59,7 +77,7 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     let common_name_auth_store =
         CommonNameAuthStore::new(config.peers.into_iter().filter_map(|peer| match peer.auth {
             PeerAuth::Http { .. } | PeerAuth::Websocket { .. } => None,
-            PeerAuth::Quic { common_name } => Some(common_name),
+            PeerAuth::Quic { common_name, .. } => Some(common_name),
         }));
 
     let mut tun_actor = TunActor::new(

@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::fmt::Debug;
 use std::future;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -27,20 +28,20 @@ use crate::util::{
     PUBLIC_ID_HEADER,
 };
 
-pub struct Http2TransportActor {
-    inner: Arc<Http2TransportActorInner>,
+pub struct Http2TransportActor<T: Send + Debug + Clone> {
+    inner: Arc<Http2TransportActorInner<T>>,
     builder: Option<Builder<TlsAcceptor>>,
 }
 
 #[derive(Debug)]
-struct Http2TransportActorInner {
+struct Http2TransportActorInner<T: Send + Debug + Clone> {
     tun_sender: Sender<TunMessage>,
 
     auth_store: AuthStore,
-    peer_store: PeerStore,
+    peer_store: PeerStore<T>,
 }
 
-impl Http2TransportActorInner {
+impl<T: Send + Sync + Debug + Clone + 'static> Http2TransportActorInner<T> {
     #[instrument]
     async fn handle(&self, request: Request<Body>) -> Response<Body> {
         debug!(?request, "accept new http request");
@@ -101,7 +102,7 @@ impl Http2TransportActorInner {
         transport_rx: Body,
         public_id: String,
         tun_sender: Sender<TunMessage>,
-        peer_store: PeerStore,
+        peer_store: PeerStore<T>,
     ) {
         let http2_transport_receiver = peer_store
             .get_transport_receiver_by_identity(&public_id)
@@ -126,7 +127,7 @@ impl Http2TransportActorInner {
     async fn transport_to_tun(
         mut transport_rx: Body,
         tun_sender: Sender<TunMessage>,
-        peer_store: PeerStore,
+        peer_store: PeerStore<T>,
         public_id: String,
     ) -> anyhow::Result<()> {
         while let Some(packet) = transport_rx
@@ -233,11 +234,11 @@ impl Http2TransportActorInner {
     }
 }
 
-impl Http2TransportActor {
+impl<T: Send + Sync + Debug + Clone + 'static> Http2TransportActor<T> {
     pub async fn new(
         tun_sender: Sender<TunMessage>,
         auth_store: AuthStore,
-        peer_store: PeerStore,
+        peer_store: PeerStore<T>,
         listen_addr: SocketAddr,
         cert: &str,
         key: &str,

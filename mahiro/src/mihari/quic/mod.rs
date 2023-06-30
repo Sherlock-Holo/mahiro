@@ -5,8 +5,7 @@ use std::time::Duration;
 use bytes::BytesMut;
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
-use futures_util::stream::FuturesUnordered;
-use futures_util::{FutureExt, StreamExt};
+use futures_util::StreamExt;
 use quinn::{
     Connecting, Connection, ConnectionError, Endpoint, RecvStream, SendStream, ServerConfig, VarInt,
 };
@@ -26,6 +25,12 @@ use crate::util::Receiver;
 
 mod common_name_auth;
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum QuicType {
+    Datagram,
+    Stream,
+}
+
 #[derive(Debug)]
 pub struct QuicTlsConfig<'a> {
     pub ca: &'a str,
@@ -38,7 +43,7 @@ pub struct QuicTransportActor {
 
     endpoint: Endpoint,
     auth_store: Arc<CommonNameAuthStore>,
-    peer_store: PeerStore,
+    peer_store: PeerStore<QuicType>,
 
     heartbeat_interval: Duration,
 }
@@ -47,7 +52,7 @@ impl QuicTransportActor {
     pub async fn new(
         tun_sender: Sender<TunMessage>,
         auth_store: CommonNameAuthStore,
-        peer_store: PeerStore,
+        peer_store: PeerStore<QuicType>,
         listen_addr: SocketAddr,
         QuicTlsConfig { ca, key, cert }: QuicTlsConfig<'_>,
         heartbeat_interval: Duration,
@@ -99,6 +104,7 @@ impl QuicTransportActor {
 #[derivative(Debug)]
 struct QuicTransportWorker {
     common_name: String,
+    quic_type: QuicType,
 
     #[derivative(Debug = "ignore")]
     connection: Arc<Connection>,
@@ -108,14 +114,14 @@ struct QuicTransportWorker {
     tun_sender: Sender<TunMessage>,
 
     auth_store: Arc<CommonNameAuthStore>,
-    peer_store: PeerStore,
+    peer_store: PeerStore<QuicType>,
 }
 
 impl QuicTransportWorker {
     async fn new(
         connecting: Connecting,
         auth_store: Arc<CommonNameAuthStore>,
-        peer_store: PeerStore,
+        peer_store: PeerStore<QuicType>,
         tun_sender: Sender<TunMessage>,
     ) -> anyhow::Result<Self> {
         let connection = connecting
@@ -157,10 +163,15 @@ impl QuicTransportWorker {
 
         let quic_transport_receiver = peer_store
             .get_transport_receiver_by_identity(&common_name)
-            .expect("handshake done public id has no quic transport receiver");
+            .expect("auth done but has no quic transport receiver");
+
+        let quic_type = peer_store
+            .get_info_by_identity(&common_name)
+            .expect("auth done but has no quic type");
 
         Ok(Self {
             common_name,
+            quic_type,
             connection: Arc::new(connection),
             transport_receiver: quic_transport_receiver,
             tun_sender,
@@ -170,12 +181,10 @@ impl QuicTransportWorker {
     }
 
     async fn run(&mut self) -> anyhow::Result<()> {
-        let mut futs = FuturesUnordered::new();
-
-        futs.push(async { self.run_datagram().await }.left_future());
-        futs.push(async { self.run_stream().await }.right_future());
-
-        futs.next().await.unwrap()
+        match self.quic_type {
+            QuicType::Datagram => self.run_datagram().await,
+            QuicType::Stream => self.run_stream().await,
+        }
     }
 
     async fn run_datagram(&self) -> anyhow::Result<()> {
@@ -241,7 +250,7 @@ impl QuicTransportWorker {
     async fn stream_transport_to_tun(
         transport_rx: RecvStream,
         tun_sender: Sender<TunMessage>,
-        peer_store: PeerStore,
+        peer_store: PeerStore<QuicType>,
         common_name: String,
     ) -> anyhow::Result<()> {
         let mut buf = BytesMut::with_capacity(1500 * 4);
@@ -305,7 +314,7 @@ impl QuicTransportWorker {
     async fn datagram_transport_to_tun(
         transport_rx: Arc<Connection>,
         tun_sender: Sender<TunMessage>,
-        peer_store: PeerStore,
+        peer_store: PeerStore<QuicType>,
         common_name: String,
     ) -> anyhow::Result<()> {
         loop {

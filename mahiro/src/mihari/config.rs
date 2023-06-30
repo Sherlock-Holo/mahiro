@@ -57,7 +57,15 @@ pub enum PeerAuth {
 
     Quic {
         common_name: String,
+        quic_type: QuicType,
     },
+}
+
+#[derive(Debug, Eq, PartialEq, Copy, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuicType {
+    Datagram,
+    Stream,
 }
 
 #[derive(Debug, Deserialize)]

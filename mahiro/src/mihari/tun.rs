@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::net::IpAddr;
 
 use bytes::BytesMut;
@@ -21,11 +22,11 @@ use crate::util::Receiver;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct TunActor {
+pub struct TunActor<T: Send + Debug + Clone> {
     mailbox_sender: Sender<Message>,
     #[derivative(Debug = "ignore")]
     mailbox: Receiver<Message>,
-    peer_store: PeerStore,
+    peer_store: PeerStore<T>,
 
     tun_ipv4: Ipv4Net,
     tun_ipv6: Ipv6Net,
@@ -36,11 +37,11 @@ pub struct TunActor {
     tun_readers: Vec<TunReader>,
 }
 
-impl TunActor {
+impl<T: Send + Sync + Debug + Clone + 'static> TunActor<T> {
     pub async fn new(
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
-        peer_store: PeerStore,
+        peer_store: PeerStore<T>,
         tun_ipv4: Ipv4Net,
         tun_ipv6: Ipv6Net,
         tun_name: String,
@@ -95,7 +96,10 @@ impl TunActor {
         Ok(())
     }
 
-    async fn read_from_tun(mut tun_reader: TunReader, peer_store: PeerStore) -> anyhow::Result<()> {
+    async fn read_from_tun(
+        mut tun_reader: TunReader,
+        peer_store: PeerStore<T>,
+    ) -> anyhow::Result<()> {
         let mut buf = BytesMut::with_capacity(1500 * 5);
         loop {
             buf.reserve(1500);

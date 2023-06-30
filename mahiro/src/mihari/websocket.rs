@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::fmt::Debug;
 use std::future;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -31,21 +32,21 @@ use crate::token::AuthStore;
 use crate::util;
 use crate::util::{Receiver, HMAC_HEADER, PUBLIC_ID_HEADER};
 
-pub struct WebsocketTransportActor {
-    inner: Arc<WebsocketTransportActorInner>,
+pub struct WebsocketTransportActor<T: Send + Debug + Clone> {
+    inner: Arc<WebsocketTransportActorInner<T>>,
     builder: Option<Builder<TlsAcceptor>>,
 }
 
 #[derive(Debug)]
-struct WebsocketTransportActorInner {
+struct WebsocketTransportActorInner<T: Send + Debug + Clone> {
     tun_sender: Sender<TunMessage>,
 
     auth_store: AuthStore,
-    peer_store: PeerStore,
+    peer_store: PeerStore<T>,
     heartbeat_interval: Duration,
 }
 
-impl WebsocketTransportActorInner {
+impl<T: Send + Sync + Debug + Clone + 'static> WebsocketTransportActorInner<T> {
     #[instrument]
     async fn handle(&self, request: Request<Body>) -> Response<Body> {
         debug!(?request, "accept new http request");
@@ -107,7 +108,7 @@ impl WebsocketTransportActorInner {
         websocket: HyperWebsocket,
         public_id: String,
         tun_sender: Sender<TunMessage>,
-        peer_store: PeerStore,
+        peer_store: PeerStore<T>,
         heartbeat_interval: Duration,
     ) {
         let websocket = match websocket.await {
@@ -199,7 +200,7 @@ impl WebsocketTransportActorInner {
         tun_sender: Sender<TunMessage>,
         ping_pong_tx: Sender<PingPong>,
         pong_tx: Sender<()>,
-        peer_store: PeerStore,
+        peer_store: PeerStore<T>,
         public_id: String,
     ) -> anyhow::Result<()> {
         while let Some(ws_message) = transport_rx
@@ -369,11 +370,11 @@ impl WebsocketTransportActorInner {
     }
 }
 
-impl WebsocketTransportActor {
+impl<T: Send + Sync + Debug + Clone + 'static> WebsocketTransportActor<T> {
     pub async fn new(
         tun_sender: Sender<TunMessage>,
         auth_store: AuthStore,
-        peer_store: PeerStore,
+        peer_store: PeerStore<T>,
         listen_addr: SocketAddr,
         cert: &str,
         key: &str,
