@@ -1,16 +1,19 @@
-use std::net::{Ipv6Addr, SocketAddr};
+use std::net::{Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
 use flume::{Sender, TrySendError};
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::stream::FuturesUnordered;
+use futures_util::{FutureExt, StreamExt, TryStreamExt};
 use http::Uri;
 use quinn::{ClientConfig, Connection, ConnectionError, Endpoint, RecvStream, SendStream};
 use tap::TapFallible;
 use tokio::task::JoinSet;
+use tokio::time as tokio_time;
+use tokio_stream::wrappers::IntervalStream;
 use tokio_util::codec::{FramedRead, FramedWrite};
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::message::TransportMessage as Message;
 use super::message::TunMessage;
@@ -43,6 +46,7 @@ pub struct QuicTransportActor {
     remote_domain: String,
     domain_and_port: String,
     heartbeat_interval: Duration,
+    rebind_interval: Option<Duration>,
     quic_type: QuicType,
     transport_count: u8,
 }
@@ -54,6 +58,7 @@ impl QuicTransportActor {
         heartbeat_interval: Duration,
         mailbox: Receiver<Message>,
         tun_sender: Sender<TunMessage>,
+        rebind_interval: Option<Duration>,
         quic_type: QuicType,
     ) -> anyhow::Result<Self> {
         let remote_addr: Uri = remote_addr
@@ -87,6 +92,7 @@ impl QuicTransportActor {
             remote_domain: remote_domain.to_string(),
             domain_and_port: domain_and_port.to_string(),
             heartbeat_interval,
+            rebind_interval,
             quic_type,
             transport_count: 1,
         })
@@ -126,11 +132,53 @@ impl QuicTransportActor {
     }
 
     pub async fn run(&mut self) {
-        loop {
-            if let Err(err) = self.run_circle().await {
-                error!(%err, "quic actor run circle failed");
+        let mut futures_unordered = FuturesUnordered::new();
+        if let Some(interval) = self.rebind_interval {
+            futures_unordered
+                .push(Self::switch_local_addr(interval, self.endpoint.clone()).left_future());
+        }
+
+        futures_unordered.push(
+            async move {
+                loop {
+                    if let Err(err) = self.run_circle().await {
+                        error!(%err, "quic actor run circle failed");
+                    }
+                }
+            }
+            .right_future(),
+        );
+
+        futures_unordered
+            .next()
+            .await
+            .expect("quic transport stopped")
+    }
+
+    pub async fn switch_local_addr(interval: Duration, endpoint: Endpoint) {
+        let mut interval = IntervalStream::new(tokio_time::interval(interval));
+        interval.next().await.unwrap();
+
+        while interval.next().await.is_some() {
+            let udp_socket = match UdpSocket::bind(SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0))
+            {
+                Err(err) => {
+                    error!(%err, "create new udp socket failed");
+
+                    continue;
+                }
+
+                Ok(udp_socket) => udp_socket,
+            };
+
+            if let Err(err) = endpoint.rebind(udp_socket) {
+                error!(%err, "endpoint rebind failed");
+            } else {
+                debug!("endpoint rebind done");
             }
         }
+
+        unreachable!("interval stream stop")
     }
 
     async fn run_circle(&mut self) -> anyhow::Result<()> {
@@ -396,6 +444,7 @@ mod tests {
             HEARTBEAT,
             quic_transport_mailbox.into_stream(),
             tun_sender,
+            Some(Duration::from_secs(1)),
             QuicType::Datagram,
         )
         .await
@@ -468,6 +517,7 @@ mod tests {
             HEARTBEAT,
             quic_transport_mailbox.into_stream(),
             tun_sender,
+            Some(Duration::from_secs(1)),
             QuicType::Stream,
         )
         .await

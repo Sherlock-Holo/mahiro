@@ -98,6 +98,7 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
             ca_cert,
             remote_addr,
             r#type,
+            rebind_interval,
         } => {
             let quic_type = match r#type {
                 ConfigQuicType::Datagram => QuicType::Datagram,
@@ -114,6 +115,7 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
                 config.heartbeat_interval,
                 transport_mailbox.into_stream(),
                 tun_sender,
+                rebind_interval,
                 quic_type,
             )
             .await?;

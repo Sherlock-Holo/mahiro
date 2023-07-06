@@ -43,6 +43,7 @@ pub enum Protocol {
         ca_cert: Option<String>,
         remote_addr: String,
         r#type: QuicType,
+        rebind_interval: Option<Duration>,
     },
 }
 
