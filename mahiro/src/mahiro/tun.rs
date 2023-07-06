@@ -22,6 +22,7 @@ pub struct TunConfig {
     pub tun_ipv6: Ipv6Net,
     pub tun_name: String,
     pub netlink_handle: Handle,
+    pub mtu: Option<u16>,
 }
 
 #[derive(Derivative)]
@@ -63,6 +64,7 @@ impl TunActor {
             tun_config.tun_ipv4,
             tun_config.tun_ipv6,
             tun_config.netlink_handle.clone(),
+            tun_config.mtu,
         )
         .await
         .tap_err(|err| error!(%err, "create tun failed"))?;
@@ -259,6 +261,7 @@ mod tests {
             tun_ipv6: Ipv6Net::new(Ipv6Addr::from_str("fc00:100::1").unwrap(), 64).unwrap(),
             tun_name: "test_tun".to_string(),
             netlink_handle: handle,
+            mtu: None,
         };
 
         let (mailbox_sender, mailbox) = flume::bounded(10);

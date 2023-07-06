@@ -17,7 +17,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf};
 use tracing::{error, info};
 use tun::AsyncQueue;
 
-const MTU: u32 = 1280;
+const DEFAULT_MTU: u32 = 1280;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -55,6 +55,7 @@ impl Tun {
         ipv4: Ipv4Net,
         ipv6: Ipv6Net,
         netlink_handle: Handle,
+        mtu: Option<u16>,
     ) -> anyhow::Result<Self> {
         let queue_size = thread::available_parallelism()
             .unwrap_or(NonZeroUsize::new(8).unwrap())
@@ -65,7 +66,7 @@ impl Tun {
 
         let queues = tun::create_queue_as_async(&configuration)?;
 
-        Tun::setup_device(&name, ipv4, ipv6, netlink_handle).await?;
+        Tun::setup_device(&name, ipv4, ipv6, netlink_handle, mtu).await?;
 
         Ok(Self {
             ipv4,
@@ -105,6 +106,7 @@ impl Tun {
         ipv4: Ipv4Net,
         ipv6: Ipv6Net,
         netlink_handle: Handle,
+        mtu: Option<u16>,
     ) -> anyhow::Result<()> {
         let mut link_handle = netlink_handle.link();
         let tun_index = match link_handle
@@ -135,7 +137,9 @@ impl Tun {
 
         info!("add ipv4 and ipv6 addr done");
 
-        let mut link_set_request = link_handle.set(tun_index).mtu(MTU).up();
+        let mtu = mtu.map(|mtu| mtu as u32).unwrap_or(DEFAULT_MTU);
+
+        let mut link_set_request = link_handle.set(tun_index).mtu(mtu).up();
         link_set_request
             .message_mut()
             .nlas
@@ -144,9 +148,9 @@ impl Tun {
         link_set_request
             .execute()
             .await
-            .tap_err(|err| error!(%err, MTU, "set tun MTU and up failed"))?;
+            .tap_err(|err| error!(%err, mtu, "set tun MTU and up failed"))?;
 
-        info!(MTU, "set tun MTU and up done");
+        info!(mtu, "set tun MTU and up done");
 
         Ok(())
     }

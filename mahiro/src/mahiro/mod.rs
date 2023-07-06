@@ -32,6 +32,7 @@ pub async fn run(config: &Path) -> anyhow::Result<()> {
         tun_ipv6: config.local_ipv6,
         tun_name: config.tun_name,
         netlink_handle: handle,
+        mtu: config.mtu,
     };
 
     let (http2_transport_sender, transport_mailbox) = flume::bounded(64);

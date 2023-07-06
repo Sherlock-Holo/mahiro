@@ -15,6 +15,7 @@ use self::nat::NatActor;
 use self::peer_store::PeerStore;
 use self::quic::{CommonNameAuthStore, QuicTlsConfig, QuicTransportActor, QuicType};
 use self::tun::TunActor;
+use self::tun::TunConfig;
 use self::websocket::WebsocketTransportActor;
 use crate::token::AuthStore;
 use crate::util;
@@ -84,10 +85,13 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
         tun_sender.clone(),
         tun_mailbox.into_stream(),
         peer_store.clone(),
-        config.local_ipv4,
-        config.local_ipv6,
-        config.tun_name.clone(),
-        handle.clone(),
+        TunConfig {
+            tun_ipv4: config.local_ipv4,
+            tun_ipv6: config.local_ipv6,
+            tun_name: config.tun_name.clone(),
+            netlink_handle: handle.clone(),
+            mtu: config.mtu,
+        },
     )
     .await?;
 

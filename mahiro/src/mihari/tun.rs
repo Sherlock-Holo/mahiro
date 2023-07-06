@@ -20,6 +20,15 @@ use crate::ip_packet::IpLocation;
 use crate::tun::{Tun, TunReader, TunWriter};
 use crate::util::Receiver;
 
+#[derive(Debug)]
+pub struct TunConfig {
+    pub tun_ipv4: Ipv4Net,
+    pub tun_ipv6: Ipv6Net,
+    pub tun_name: String,
+    pub netlink_handle: Handle,
+    pub mtu: Option<u16>,
+}
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct TunActor<T: Send + Debug + Clone> {
@@ -32,6 +41,7 @@ pub struct TunActor<T: Send + Debug + Clone> {
     tun_ipv6: Ipv6Net,
     tun_name: String,
     netlink_handle: Handle,
+    mtu: Option<u16>,
 
     tun_writers: Vec<TunWriter>,
     tun_readers: Vec<TunReader>,
@@ -42,13 +52,22 @@ impl<T: Send + Sync + Debug + Clone + 'static> TunActor<T> {
         mailbox_sender: Sender<Message>,
         mailbox: Receiver<Message>,
         peer_store: PeerStore<T>,
-        tun_ipv4: Ipv4Net,
-        tun_ipv6: Ipv6Net,
-        tun_name: String,
-        netlink_handle: Handle,
+        TunConfig {
+            tun_ipv4,
+            tun_ipv6,
+            tun_name,
+            netlink_handle,
+            mtu,
+        }: TunConfig,
     ) -> anyhow::Result<Self> {
-        let (tun_writers, tun_readers) =
-            Self::start(tun_ipv4, tun_ipv6, tun_name.clone(), netlink_handle.clone()).await?;
+        let (tun_writers, tun_readers) = Self::start(
+            tun_ipv4,
+            tun_ipv6,
+            tun_name.clone(),
+            netlink_handle.clone(),
+            mtu,
+        )
+        .await?;
 
         Ok(Self {
             mailbox_sender,
@@ -58,6 +77,7 @@ impl<T: Send + Sync + Debug + Clone + 'static> TunActor<T> {
             tun_ipv6,
             tun_name,
             netlink_handle,
+            mtu,
             tun_writers,
             tun_readers,
         })
@@ -69,8 +89,9 @@ impl<T: Send + Sync + Debug + Clone + 'static> TunActor<T> {
         tun_ipv6: Ipv6Net,
         tun_name: String,
         netlink_handle: Handle,
+        mtu: Option<u16>,
     ) -> anyhow::Result<(Vec<TunWriter>, Vec<TunReader>)> {
-        let tun = Tun::new(tun_name, tun_ipv4, tun_ipv6, netlink_handle)
+        let tun = Tun::new(tun_name, tun_ipv4, tun_ipv6, netlink_handle, mtu)
             .await
             .tap_err(|err| error!(%err, "create tun failed"))?;
 
@@ -87,6 +108,7 @@ impl<T: Send + Sync + Debug + Clone + 'static> TunActor<T> {
             self.tun_ipv6,
             self.tun_name.clone(),
             self.netlink_handle.clone(),
+            self.mtu,
         )
         .await?;
 

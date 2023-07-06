@@ -32,6 +32,8 @@ pub struct Config {
     pub nic_list: Option<Vec<String>>,
 
     pub bpf_prog: Option<String>,
+
+    pub mtu: Option<u16>,
 }
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Deserialize)]

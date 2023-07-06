@@ -20,6 +20,8 @@ pub struct Config {
 
     #[serde(deserialize_with = "parse_duration")]
     pub heartbeat_interval: Duration,
+
+    pub mtu: Option<u16>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize)]
