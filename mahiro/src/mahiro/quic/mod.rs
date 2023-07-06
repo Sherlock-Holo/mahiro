@@ -18,7 +18,7 @@ use tracing::{debug, error, info, instrument, warn};
 use super::message::TransportMessage as Message;
 use super::message::TunMessage;
 use crate::quic_stream_codec::{QuicStreamDecoder, QuicStreamEncoder};
-use crate::util::{self, Receiver};
+use crate::util::{self, Receiver, QUIC_STREAM_TRANSPORT_COUNT};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum QuicType {
@@ -48,7 +48,7 @@ pub struct QuicTransportActor {
     heartbeat_interval: Duration,
     rebind_interval: Option<Duration>,
     quic_type: QuicType,
-    transport_count: u8,
+    stream_transport_count: u8,
 }
 
 impl QuicTransportActor {
@@ -94,7 +94,7 @@ impl QuicTransportActor {
             heartbeat_interval,
             rebind_interval,
             quic_type,
-            transport_count: 1,
+            stream_transport_count: QUIC_STREAM_TRANSPORT_COUNT,
         })
     }
 
@@ -189,24 +189,14 @@ impl QuicTransportActor {
     }
 
     async fn run_datagram_circle(&mut self) -> anyhow::Result<()> {
-        let mut join_set = JoinSet::new();
+        let connection = self
+            .open_datagram_transport()
+            .await
+            .tap_err(|err| error!(%err, "open datagram transport failed"))?;
+        let mailbox = self.mailbox.clone();
+        let tun_sender = self.tun_sender.clone();
 
-        for _ in 0..self.transport_count {
-            let connection = self
-                .open_datagram_transport()
-                .await
-                .tap_err(|err| error!(%err, "open datagram transport failed"))?;
-            let mailbox = self.mailbox.clone();
-            let tun_sender = self.tun_sender.clone();
-
-            join_set.spawn(async move {
-                Self::run_datagram_transport(Arc::new(connection), tun_sender, mailbox).await
-            });
-        }
-
-        join_set.join_next().await.unwrap().unwrap();
-
-        join_set.shutdown().await;
+        Self::run_datagram_transport(connection, tun_sender, mailbox).await;
 
         Err(anyhow::anyhow!("quic actor stopped"))
     }
@@ -214,7 +204,7 @@ impl QuicTransportActor {
     async fn run_stream_circle(&mut self) -> anyhow::Result<()> {
         let mut join_set = JoinSet::new();
 
-        for _ in 0..self.transport_count {
+        for _ in 0..self.stream_transport_count {
             let (transport_tx, transport_rx) = self
                 .open_stream_transport()
                 .await
@@ -270,7 +260,7 @@ impl QuicTransportActor {
     }
 
     async fn run_datagram_transport(
-        transport_tx: Arc<Connection>,
+        transport_tx: Connection,
         tun_sender: Sender<TunMessage>,
         mut mailbox: Receiver<Message>,
     ) {

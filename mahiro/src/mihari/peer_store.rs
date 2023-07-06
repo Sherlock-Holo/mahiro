@@ -111,3 +111,9 @@ impl<T: Send + Debug + Clone> Debug for PeerChannel<T> {
             .finish()
     }
 }
+
+fn _test<T: Send>(_: Option<T>) {}
+
+fn _assert_send<T: Send + Debug + Clone>() {
+    _test::<PeerChannel<T>>(None)
+}

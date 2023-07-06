@@ -34,6 +34,8 @@ pub const MAX_FRAME_SIZE: u32 = 16777215;
 pub const HTTP2_TRANSPORT_COUNT: u8 = 1;
 /// websocket transport count
 pub const WEBSOCKET_TRANSPORT_COUNT: u8 = 4;
+/// quic stream transport count
+pub const QUIC_STREAM_TRANSPORT_COUNT: u8 = 64;
 /// transport public id header
 pub const PUBLIC_ID_HEADER: &str = "x-mahiro-public";
 /// transport hmac header
