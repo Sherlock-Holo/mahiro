@@ -28,13 +28,13 @@ use crate::util::{
     PUBLIC_ID_HEADER,
 };
 
-pub struct Http2TransportActor<T: Send + Debug + Clone> {
+pub struct Http2TransportActor<T: Send + Sync + Debug + Clone> {
     inner: Arc<Http2TransportActorInner<T>>,
     builder: Option<Builder<TlsAcceptor>>,
 }
 
 #[derive(Debug)]
-struct Http2TransportActorInner<T: Send + Debug + Clone> {
+struct Http2TransportActorInner<T: Send + Sync + Debug + Clone> {
     tun_sender: Sender<TunMessage>,
 
     auth_store: AuthStore,

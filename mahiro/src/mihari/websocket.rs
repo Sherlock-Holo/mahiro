@@ -32,13 +32,13 @@ use crate::token::AuthStore;
 use crate::util;
 use crate::util::{Receiver, HMAC_HEADER, PUBLIC_ID_HEADER};
 
-pub struct WebsocketTransportActor<T: Send + Debug + Clone> {
+pub struct WebsocketTransportActor<T: Send + Sync + Debug + Clone> {
     inner: Arc<WebsocketTransportActorInner<T>>,
     builder: Option<Builder<TlsAcceptor>>,
 }
 
 #[derive(Debug)]
-struct WebsocketTransportActorInner<T: Send + Debug + Clone> {
+struct WebsocketTransportActorInner<T: Send + Sync + Debug + Clone> {
     tun_sender: Sender<TunMessage>,
 
     auth_store: AuthStore,

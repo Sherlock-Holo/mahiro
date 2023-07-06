@@ -10,11 +10,11 @@ use super::message::TransportMessage;
 use crate::util::Receiver;
 
 #[derive(Clone, Debug)]
-pub struct PeerStore<T: Send + Debug + Clone> {
+pub struct PeerStore<T: Send + Sync + Debug + Clone> {
     inner: Arc<PeerStoreInner<T>>,
 }
 
-impl<T: Send + Debug + Clone> PeerStore<T> {
+impl<T: Send + Sync + Debug + Clone> PeerStore<T> {
     pub fn new<I: IntoIterator<Item = (String, Ipv4Addr, Ipv6Addr, T)>>(peers_iter: I) -> Self {
         let mut peers = HashMap::new();
         let mut mahiro_ipv4s = HashMap::new();
@@ -89,20 +89,20 @@ impl<T: Send + Debug + Clone> PeerStore<T> {
 }
 
 #[derive(Debug)]
-struct PeerStoreInner<T: Send + Debug + Clone> {
+struct PeerStoreInner<T: Send + Sync + Debug + Clone> {
     peers: HashMap<String, Arc<PeerChannel<T>>>,
     mahiro_ipv4s: HashMap<Ipv4Addr, Arc<PeerChannel<T>>>,
     mahiro_ipv6s: HashMap<Ipv6Addr, Arc<PeerChannel<T>>>,
     mahiro_link_local_ip: DashMap<Ipv6Addr, Arc<PeerChannel<T>>>,
 }
 
-struct PeerChannel<T: Send + Debug + Clone> {
+struct PeerChannel<T: Send + Sync + Debug + Clone> {
     http2_transport_sender: Sender<TransportMessage>,
     http2_transport_receiver: Receiver<TransportMessage>,
     info: T,
 }
 
-impl<T: Send + Debug + Clone> Debug for PeerChannel<T> {
+impl<T: Send + Sync + Debug + Clone> Debug for PeerChannel<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PeerChannel")
             .field("http2_transport_sender", &"http2_transport_sender")
@@ -114,6 +114,6 @@ impl<T: Send + Debug + Clone> Debug for PeerChannel<T> {
 
 fn _test<T: Send>(_: Option<T>) {}
 
-fn _assert_send<T: Send + Debug + Clone>() {
+fn _assert_send<T: Send + Sync + Debug + Clone>() {
     _test::<PeerChannel<T>>(None)
 }

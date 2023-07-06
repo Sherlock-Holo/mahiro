@@ -31,7 +31,7 @@ pub struct TunConfig {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct TunActor<T: Send + Debug + Clone> {
+pub struct TunActor<T: Send + Sync + Debug + Clone> {
     mailbox_sender: Sender<Message>,
     #[derivative(Debug = "ignore")]
     mailbox: Receiver<Message>,
