@@ -4,7 +4,7 @@ use ipnet::{Ipv4Net, Ipv6Net};
 use serde::Deserialize;
 use serde_with::{serde_as, DisplayFromStr};
 
-use crate::util::parse_duration;
+use crate::util::{parse_duration, parse_option_duration};
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
@@ -43,6 +43,7 @@ pub enum Protocol {
         ca_cert: Option<String>,
         remote_addr: String,
         r#type: QuicType,
+        #[serde(deserialize_with = "parse_option_duration")]
         rebind_interval: Option<Duration>,
     },
 }

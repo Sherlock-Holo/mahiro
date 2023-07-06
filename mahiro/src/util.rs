@@ -196,6 +196,16 @@ where
     humantime::parse_duration(&string).map_err(Error::custom)
 }
 
+pub fn parse_option_duration<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let string = Option::<String>::deserialize(deserializer)?;
+    string
+        .map(|string| humantime::parse_duration(&string).map_err(Error::custom))
+        .transpose()
+}
+
 pub fn build_quic_transport_config(heartbeat_interval: Duration) -> TransportConfig {
     let mut transport_config = TransportConfig::default();
 
