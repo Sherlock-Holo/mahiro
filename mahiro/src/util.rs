@@ -9,6 +9,8 @@ use aya::programs::tc::SchedClassifierLink;
 use aya::programs::xdp::XdpLink;
 use aya::programs::Link;
 use flume::r#async::RecvStream;
+use quinn::congestion::BbrConfig;
+use quinn::{IdleTimeout, MtuDiscoveryConfig, TransportConfig};
 use rustls::server::AllowAnyAuthenticatedClient;
 use rustls::{
     Certificate, ClientConfig, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerConfig,
@@ -192,6 +194,19 @@ where
 {
     let string = String::deserialize(deserializer)?;
     humantime::parse_duration(&string).map_err(Error::custom)
+}
+
+pub fn build_quic_transport_config(heartbeat_interval: Duration) -> TransportConfig {
+    let mut transport_config = TransportConfig::default();
+
+    // enable bbr and set keepalive
+    transport_config
+        .congestion_controller_factory(Arc::new(BbrConfig::default()))
+        .max_idle_timeout(Some(IdleTimeout::try_from(heartbeat_interval * 2).unwrap()))
+        .keep_alive_interval(Some(heartbeat_interval))
+        .mtu_discovery_config(Some(MtuDiscoveryConfig::default()));
+
+    transport_config
 }
 
 #[derive(Debug)]
