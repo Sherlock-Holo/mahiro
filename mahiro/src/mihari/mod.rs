@@ -29,7 +29,7 @@ mod quic;
 mod tun;
 mod websocket;
 
-pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Result<()> {
+pub async fn run(config: &Path, bpf_nat: bool) -> anyhow::Result<()> {
     let config_data = fs::read(config).await?;
     let config = serde_yaml::from_slice::<Config>(&config_data)?;
 
@@ -157,8 +157,8 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
     });
     join_set.spawn(transport_actor_fut);
 
-    if bpf_nat || bpf_forward {
-        info!(bpf_nat, bpf_forward, "enable bpf nat mode");
+    if bpf_nat {
+        info!("enable bpf nat mode");
 
         let bpf_prog = config
             .bpf_prog
@@ -174,8 +174,6 @@ pub async fn run(config: &Path, bpf_nat: bool, bpf_forward: bool) -> anyhow::Res
                 config.local_ipv4,
                 config.local_ipv6,
                 HashSet::from_iter(config.nic_list.unwrap_or_default()),
-                bpf_forward,
-                &config.tun_name,
                 bpf,
             )?;
 

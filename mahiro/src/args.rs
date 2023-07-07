@@ -50,9 +50,5 @@ pub enum Command {
         /// enable bpf mode nat
         #[arg(long)]
         bpf_nat: bool,
-
-        /// enable bpf packet redirect forward
-        #[arg(long)]
-        bpf_forward: bool,
     },
 }
