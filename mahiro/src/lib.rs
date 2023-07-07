@@ -51,6 +51,8 @@ fn init_log(log_level: LogLevel) {
 
     let targets = Targets::new()
         .with_target("h2", LevelFilter::OFF)
+        .with_target("netlink_proto", LevelFilter::WARN)
+        .with_target("quinn_proto", LevelFilter::WARN)
         .with_default(LevelFilter::DEBUG);
 
     let layered = Registry::default().with(targets).with(layer).with(level);
