@@ -46,8 +46,8 @@ hyper-tungstenite = "0.10"
 quinn = "0.10"
 
 # bpf
-aya = { git = "https://github.com/aya-rs/aya", rev = "58f1ecb", features = ["async_tokio"] }
-aya-log = { git = "https://github.com/aya-rs/aya", rev = "58f1ecb" }
+aya = { git = "https://github.com/aya-rs/aya", rev = "5c86b7e", features = ["async_tokio"] }
+aya-log = { git = "https://github.com/aya-rs/aya", rev = "5c86b7e" }
 
 # config
 clap = { version = "4", features = ["derive"] }
