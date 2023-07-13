@@ -10,10 +10,9 @@ tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time",
 tokio-stream = { version = "0.1", features = ["time", "io-util"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 futures-util = "0.3"
-flume = { version = "0.10", git = "https://github.com/zesterer/flume.git", rev = "bfa2a9b" }
+flume = { version = "0.10", git = "https://github.com/zesterer/flume.git", rev = "80d19c4" }
 bytes = "1"
 derivative = "2"
-either = "1"
 
 # mptcp
 socket2 = "0.5"
@@ -73,5 +72,4 @@ time = { version = "0.3", features = ["macros", "formatting"] }
 [dev-dependencies]
 test-log = { version = "0.2", default-features = false, features = ["trace"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-replace_with = "0.1"
 nix = "0.26"

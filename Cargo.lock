@@ -586,12 +586,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "either"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fcaabb2fef8c910e7f4c7ce9f67a1283a1715879a7c230ca9d6d1ae31f16d91"
-
-[[package]]
 name = "equivalent"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -621,12 +615,12 @@ dependencies = [
 [[package]]
 name = "flume"
 version = "0.10.14"
-source = "git+https://github.com/zesterer/flume.git?rev=bfa2a9b#bfa2a9bfe67a46d79db1bae7928b7b64cdc66681"
+source = "git+https://github.com/zesterer/flume.git?rev=80d19c4#80d19c4931842c8f1640c86f7faaced0c94f638c"
 dependencies = [
- "futures-core",
- "futures-sink",
- "nanorand",
- "spin 0.9.8",
+    "futures-core",
+    "futures-sink",
+    "nanorand",
+    "spin 0.9.8",
 ]
 
 [[package]]
@@ -1061,7 +1055,6 @@ dependencies = [
  "clap",
  "dashmap",
  "derivative",
- "either",
  "flume",
  "futures-util",
  "http",
@@ -1075,7 +1068,6 @@ dependencies = [
  "network-types",
  "nix",
  "quinn",
- "replace_with",
  "rtnetlink 0.13.0",
  "rustls",
  "rustls-native-certs",
@@ -1627,12 +1619,6 @@ name = "regex-syntax"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ab07dc67230e4a4718e70fd5c20055a4334b121f1f9db8fe63ef39ce9b8c846"
-
-[[package]]
-name = "replace_with"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3a8614ee435691de62bcffcf4a66d91b3594bf1428a5722e79103249a095690"
 
 [[package]]
 name = "ring"
