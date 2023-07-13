@@ -66,7 +66,14 @@ fn update_l4_csum(
 
             offset + offset_of!(UdpHdr, check)
         }
-        L4Hdr::Icmp(_) => return Ok(()),
+        L4Hdr::Icmp(_) => {
+            // icmp checksum doesn't check ip header, icmpv6 will check
+            if matches!(ip_addr_type, IpAddrType::V4) {
+                return Ok(());
+            }
+
+            offset + offset_of!(IcmpHdr, checksum)
+        }
     };
 
     unsafe {
